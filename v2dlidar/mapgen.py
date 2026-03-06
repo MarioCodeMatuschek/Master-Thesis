@@ -1,6 +1,6 @@
 
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 import random, math
 import numpy as np
 from .geometry import Segment
@@ -18,7 +18,10 @@ class ScenarioSpec:
     layout: str = "union"   # "union" and "appartment" will be the sample layout choices (random rectangle overlap vs. clearn floorplan like)
     apt_rows: int = 2   # room grid rows
     apt_cols: int = 3   # room grid cols
-    apt_door_prob: float = 0.8  #chance of doorway between adjacent rooms
+    apt_door_prob: float = 0.8  # chance of doorway between adjacent rooms
+    apt_min_door_width: float = 0.6  # min door gap (m); should exceed 2× occupancy wall thickness (~0.15 m) so doors stay traversable after inflation
+    apt_verify_connectivity: bool = False  # if True, check that free space is one connected component after generation
+    apt_iterations: int = 4  # BSP split iterations for apartment layout (number of recursive splits)
 
 def _rect_edges(cx, cy, w, h, yaw):
     c = math.cos(yaw); s = math.sin(yaw)
@@ -167,18 +170,166 @@ def _generate_union_scenario(spec: ScenarioSpec):
     return segments, spec, union, res
 
 
+def _sample_partition(total: float, n: int, rng: random.Random, min_val: float) -> List[float]:
+    """Sample n positive values that sum to total, each >= min_val."""
+    if n <= 0:
+        return []
+    if n == 1:
+        return [total]
+    raw = [rng.uniform(0.1, 1.0) for _ in range(n)]
+    s = sum(raw)
+    vals = [total * x / s for x in raw]
+    for i in range(n):
+        if vals[i] < min_val:
+            vals[i] = min_val
+    s = sum(vals)
+    if s > 0:
+        vals = [v * total / s for v in vals]
+    return vals
+
+
+# --- BSP apartment layout (from apartment_scenario_generator.py) ---
+
+class _AptRoom:
+    """Axis-aligned room rectangle for BSP apartment generation."""
+    __slots__ = ("x", "y", "width", "height")
+
+    def __init__(self, x: float, y: float, width: float, height: float):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+
+
+def _apt_find_shared_wall(r1: _AptRoom, r2: _AptRoom):
+    """
+    If two rooms share a wall, returns (door_x_or_mid_x, door_y_or_mid_y, "vertical"|"horizontal").
+    Otherwise returns None.
+    """
+    tol = 0.1
+    # Vertical shared wall
+    if abs((r1.x + r1.width) - r2.x) < tol or abs((r2.x + r2.width) - r1.x) < tol:
+        overlap_y_start = max(r1.y, r2.y)
+        overlap_y_end = min(r1.y + r1.height, r2.y + r2.height)
+        if overlap_y_start < overlap_y_end:
+            mid_y = (overlap_y_start + overlap_y_end) / 2
+            door_x = r2.x if abs((r1.x + r1.width) - r2.x) < tol else r1.x
+            return (door_x, mid_y, "vertical")
+    # Horizontal shared wall
+    if abs((r1.y + r1.height) - r2.y) < tol or abs((r2.y + r2.height) - r1.y) < tol:
+        overlap_x_start = max(r1.x, r2.x)
+        overlap_x_end = min(r1.x + r1.width, r2.x + r2.width)
+        if overlap_x_start < overlap_x_end:
+            mid_x = (overlap_x_start + overlap_x_end) / 2
+            door_y = r2.y if abs((r1.y + r1.height) - r2.y) < tol else r1.y
+            return (mid_x, door_y, "horizontal")
+    return None
+
+
+def _apt_split_space(room: _AptRoom, rng: random.Random, min_size: float = 2.5) -> List[_AptRoom]:
+    """Split one room along the longer axis; returns [room] or [r1, r2]."""
+    split_vertically = room.width > room.height
+    if split_vertically and room.width > min_size * 2:
+        split_point = rng.uniform(min_size, room.width - min_size)
+        return [
+            _AptRoom(room.x, room.y, split_point, room.height),
+            _AptRoom(room.x + split_point, room.y, room.width - split_point, room.height),
+        ]
+    if not split_vertically and room.height > min_size * 2:
+        split_point = rng.uniform(min_size, room.height - min_size)
+        return [
+            _AptRoom(room.x, room.y, room.width, split_point),
+            _AptRoom(room.x, room.y + split_point, room.width, room.height - split_point),
+        ]
+    return [room]
+
+
+def _generate_apartment_bsp(
+    width: float, height: float, iterations: int, rng: random.Random
+) -> Tuple[List[_AptRoom], List[Tuple[float, float, str]]]:
+    """
+    BSP apartment generator. Returns (rooms, doors) where doors are
+    (x_or_mid_x, y_or_mid_y, "vertical"|"horizontal").
+    """
+    rooms: List[_AptRoom] = [_AptRoom(0, 0, width, height)]
+    doors: List[Tuple[float, float, str]] = []
+    for _ in range(iterations):
+        new_rooms: List[_AptRoom] = []
+        for r in rooms:
+            res = _apt_split_space(r, rng)
+            if len(res) > 1:
+                door = _apt_find_shared_wall(res[0], res[1])
+                if door is not None:
+                    doors.append(door)
+                new_rooms.extend(res)
+            else:
+                new_rooms.append(r)
+        rooms = new_rooms
+    return rooms, doors
+
+
+def get_apartment_layout_data(spec: ScenarioSpec) -> Optional[Tuple[List[_AptRoom], List[Tuple[float, float, str]]]]:
+    """
+    Return (rooms, doors) for apartment layout visualization only.
+    Uses the same BSP as _generate_apartment_scenario so drawing matches the generated segments.
+    Returns None if spec.layout != "apartment".
+    """
+    if getattr(spec, "layout", "union") != "apartment":
+        return None
+    random.seed(spec.seed)
+    rng = random.Random(spec.seed)
+    iterations = max(1, getattr(spec, "apt_iterations", 4))
+    rooms, doors = _generate_apartment_bsp(spec.width, spec.height, iterations, rng)
+    return (rooms, doors)
+
+
+def _apt_wall_extent_for_door(
+    rooms: List[_AptRoom], dx: float, dy: float, orientation: str, tol: float = 0.1
+) -> Tuple[float, float]:
+    """
+    Returns (start, end) in world coordinates along the wall that contains the door.
+    For vertical wall: start/end are y_min, y_max. For horizontal: x_min, x_max.
+    Uses the two rooms that share the wall containing (dx, dy).
+    """
+    if orientation == "vertical":
+        # Wall at x = dx; find the two rooms that share this wall (door at (dx, dy) lies on it)
+        left_room = None  # r.x + r.width ~ dx
+        right_room = None  # r.x ~ dx
+        for r in rooms:
+            if abs((r.x + r.width) - dx) < tol and r.y <= dy + tol and dy - tol <= r.y + r.height:
+                left_room = r
+            if abs(r.x - dx) < tol and r.y <= dy + tol and dy - tol <= r.y + r.height:
+                right_room = r
+        if left_room is not None and right_room is not None:
+            y_min = max(left_room.y, right_room.y)
+            y_max = min(left_room.y + left_room.height, right_room.y + right_room.height)
+            if y_min < y_max:
+                return (y_min, y_max)
+        return (dy - 0.5, dy + 0.5)
+    else:
+        # Horizontal wall at y = dy
+        below_room = None
+        above_room = None
+        for r in rooms:
+            if abs((r.y + r.height) - dy) < tol and r.x <= dx + tol and dx - tol <= r.x + r.width:
+                below_room = r
+            if abs(r.y - dy) < tol and r.x <= dx + tol and dx - tol <= r.x + r.width:
+                above_room = r
+        if below_room is not None and above_room is not None:
+            x_min = max(below_room.x, above_room.x)
+            x_max = min(below_room.x + below_room.width, above_room.x + above_room.width)
+            if x_min < x_max:
+                return (x_min, x_max)
+        return (dx - 0.5, dx + 0.5)
+
+
 def _generate_apartment_scenario(spec: ScenarioSpec):
     """
-    Build an apartment-like floorplan inspired by apartment_floorplan.svg:
+    Build an apartment-like floorplan using BSP (binary space partitioning):
+    recursively split the space along the longer axis and place a door between
+    each pair of sibling rooms. Matches the layout produced by apartment_scenario_generator.py.
 
-    - Outer rectangular boundary
-    - One main vertical spine wall with a doorway near the middle
-    - Additional vertical walls on left/right to form rooms
-    - Two horizontal walls at different heights with door gaps
-      (forming a corridor-like central region)
-    - Doors are represented as gaps in otherwise continuous walls
-
-    Returns (segments, spec, interior, res) just like _generate_union_scenario.
+    Returns (segments, spec, interior, res) with the same structure as _generate_union_scenario.
     """
     random.seed(spec.seed)
     rng = random.Random(spec.seed)
@@ -186,141 +337,45 @@ def _generate_apartment_scenario(spec: ScenarioSpec):
     res = max(1e-3, float(spec.outline_res))
     W = int(math.ceil(spec.width / res))
     H = int(math.ceil(spec.height / res))
-    # Entire map interior is potentially free; walls will be added via segments
     interior = np.ones((H, W), dtype=np.uint8)
 
+    iterations = max(1, getattr(spec, "apt_iterations", 4))
+    min_door_width = float(getattr(spec, "apt_min_door_width", 0.6))
+    eps = 1e-6
+
+    rooms, doors = _generate_apartment_bsp(spec.width, spec.height, iterations, rng)
+
     segments: List[Segment] = []
-    # Outer boundary walls
     segments += _rect_edges(
         spec.width / 2.0, spec.height / 2.0, spec.width, spec.height, 0.0
     )
 
-    # Small helper for random jitter
-    def jitter(base: float, span: float) -> float:
-        return base + rng.uniform(-span, span)
-
-    # --- Key structural lines (normalized from SVG, then jittered) ---
-
-    # Main vertical spine ~ center
-    x_main = jitter(0.5 * spec.width, 0.05 * spec.width)
-
-    # Optional left/right vertical partitions (inspired by x=250, 550 in SVG)
-    # Use apt_cols to decide how much structure we add
-    cols = max(1, int(getattr(spec, "apt_cols", 3)))
-    x_left = jitter(0.3 * spec.width, 0.05 * spec.width) if cols >= 2 else None
-    x_right = jitter(0.7 * spec.width, 0.05 * spec.width) if cols >= 3 else None
-
-    # Two horizontal “levels” (like y=250, y=350 in SVG)
-    y_upper = jitter(0.4 * spec.height, 0.05 * spec.height)
-    y_lower = jitter(0.6 * spec.height, 0.05 * spec.height)
-
-    # Clamp everything inside the outer rectangle
-    x_main = min(max(x_main, 0.2 * spec.width), 0.8 * spec.width)
-    if x_left is not None:
-        x_left = min(max(x_left, 0.1 * spec.width), x_main - 0.1 * spec.width)
-    if x_right is not None:
-        x_right = min(
-            max(x_right, x_main + 0.1 * spec.width), 0.9 * spec.width
-        )
-    y_upper = min(max(y_upper, 0.2 * spec.height), 0.5 * spec.height)
-    y_lower = min(max(y_lower, 0.5 * spec.height), 0.8 * spec.height)
-
-    # --- Helpers to add walls with door gaps ---
-
-    def add_vertical_wall(x: float, y0: float, y1: float,
-                          door_center: float = None,
-                          door_height: float = None):
-        """Add a vertical wall at x from y0 to y1 with optional door gap."""
-        eps = 1e-3
-        if door_center is None or door_height is None:
-            segments.append(Segment(x, y0, x, y1))
-            return
-        span = y1 - y0
-        dh = min(door_height, 0.8 * span)
-        dc = min(max(door_center, y0 + 0.1 * span), y1 - 0.1 * span)
-        d0 = max(y0, dc - 0.5 * dh)
-        d1 = min(y1, dc + 0.5 * dh)
-        if d0 - y0 > eps:
-            segments.append(Segment(x, y0, x, d0))
-        if y1 - d1 > eps:
-            segments.append(Segment(x, d1, x, y1))
-
-    def add_horizontal_wall(y: float, x0: float, x1: float,
-                            door_center: float = None,
-                            door_width: float = None):
-        """Add a horizontal wall at y from x0 to x1 with optional door gap."""
-        eps = 1e-3
-        if door_center is None or door_width is None:
-            segments.append(Segment(x0, y, x1, y))
-            return
-        span = x1 - x0
-        dw = min(door_width, 0.8 * span)
-        dc = min(max(door_center, x0 + 0.1 * span), x1 - 0.1 * span)
-        d0 = max(x0, dc - 0.5 * dw)
-        d1 = min(x1, dc + 0.5 * dw)
-        if d0 - x0 > eps:
-            segments.append(Segment(x0, y, d0, y))
-        if x1 - d1 > eps:
-            segments.append(Segment(d1, y, x1, y))
-
-    # --- Vertical walls (like x=400, 250, 550 in SVG) ---
-
-    # Main spine: full height with a doorway roughly in the middle
-    add_vertical_wall(
-        x_main,
-        0.0,
-        spec.height,
-        door_center=jitter(0.5 * spec.height, 0.05 * spec.height),
-        door_height=0.12 * spec.height,
-    )
-
-    # Left partition: below upper level, with door near between upper/lower
-    if x_left is not None:
-        add_vertical_wall(
-            x_left,
-            y_upper,
-            spec.height,
-            door_center=jitter(
-                0.5 * (y_upper + y_lower), 0.05 * spec.height
-            ),
-            door_height=(y_lower - y_upper) * 0.6,
-        )
-
-    # Right partition: below lower level, sometimes with a door, sometimes solid
-    if x_right is not None:
-        if rng.random() < 0.7:
-            add_vertical_wall(
-                x_right,
-                y_lower,
-                spec.height,
-                door_center=jitter(
-                    0.5 * (y_lower + spec.height), 0.05 * spec.height
-                ),
-                door_height=(spec.height - y_lower) * 0.4,
-            )
+    half_gap = min_door_width / 2.0
+    for door in doors:
+        dx, dy, orientation = door
+        if orientation == "vertical":
+            y_min, y_max = _apt_wall_extent_for_door(rooms, dx, dy, "vertical")
+            if y_min < dy - half_gap - eps:
+                segments.append(Segment(dx, y_min, dx, dy - half_gap))
+            if dy + half_gap + eps < y_max:
+                segments.append(Segment(dx, dy + half_gap, dx, y_max))
         else:
-            add_vertical_wall(x_right, y_lower, spec.height)
+            x_min, x_max = _apt_wall_extent_for_door(rooms, dx, dy, "horizontal")
+            if x_min < dx - half_gap - eps:
+                segments.append(Segment(x_min, dy, dx - half_gap, dy))
+            if dx + half_gap + eps < x_max:
+                segments.append(Segment(dx + half_gap, dy, x_max, dy))
 
-    # --- Horizontal walls (like y=250 and y=350 in SVG) ---
-
-    # Upper horizontal: from left boundary to main spine, with door on the left side
-    door_w = 0.12 * spec.width
-    add_horizontal_wall(
-        y_upper,
-        0.0,
-        x_main,
-        door_center=jitter(0.35 * spec.width, 0.05 * spec.width),
-        door_width=door_w,
-    )
-
-    # Lower horizontal: from main spine to right boundary, with door on the right side
-    add_horizontal_wall(
-        y_lower,
-        x_main,
-        spec.width,
-        door_center=jitter(0.75 * spec.width, 0.05 * spec.width),
-        door_width=door_w,
-    )
+    if getattr(spec, "apt_verify_connectivity", False):
+        from .planner import free_space_connected_components
+        n_comp, _ = free_space_connected_components(
+            segments, spec.width, spec.height, res, interior=interior
+        )
+        if n_comp != 1:
+            import warnings
+            warnings.warn(
+                f"Apartment scenario free space has {n_comp} connected components (expected 1). Layout may have enclosed rooms."
+            )
 
     return segments, spec, interior, res
 

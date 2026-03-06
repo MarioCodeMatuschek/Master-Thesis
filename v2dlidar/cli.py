@@ -50,7 +50,16 @@ def main():
     manual.add_argument("--grid_res", type=float, default=0.1)
 
     args = ap.parse_args()
-    scen = ScenarioSpec(width=args.width, height=args.height, n_rects=args.n_rects, seed=args.seed, layout=args.layout, apt_rows=args.apt_rows, apt_cols=args.apt_cols, apt_door_prob=args.apt_door_prob,)
+    scen = ScenarioSpec(
+        width=args.width,
+        height=args.height,
+        n_rects=args.n_rects,
+        seed=args.seed,
+        layout=args.layout,
+        apt_rows=args.apt_rows,
+        apt_cols=args.apt_cols,
+        apt_door_prob=args.apt_door_prob,
+    )
     lidar = LidarSpec(fov_deg=args.fov_deg, num_rays=args.num_rays, max_range=args.max_range, range_noise_std=args.noise_std, dropout_prob=args.dropout)
     cfg = AutoGenConfig(
         scenarios=getattr(args, "scenarios", 1),

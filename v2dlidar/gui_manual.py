@@ -4,8 +4,9 @@ import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+import matplotlib.patches as mpatches
 import numpy as np, math, os, random
-from .mapgen import ScenarioSpec, generate_scenario
+from .mapgen import ScenarioSpec, generate_scenario, get_apartment_layout_data
 from .planner import occupancy_from_segments, astar_path
 from .dataset import DatasetGenerator, AutoGenConfig
 from .lidar import LidarSpec
@@ -14,89 +15,84 @@ class ManualGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Virtual 2D LiDAR - Manual Scenario GUI")
-        # Parameters frame
         params = ttk.Frame(self)
         params.pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=8)
-        # Scenario controls
-        ttk.Label(params, text="Output dir").pack(anchor="w")
-        self.out_var = tk.StringVar(value="./dataset")
-        ttk.Entry(params, textvariable=self.out_var, width=28).pack(anchor="w")
-        ttk.Label(params, text="Scenario ID").pack(anchor="w")
-        self.scen_id_var = tk.IntVar(value=0)
-        ttk.Entry(params, textvariable=self.scen_id_var, width=10).pack(anchor="w")
-        ttk.Label(params, text="Width, Height").pack(anchor="w")
-        self.width_var = tk.DoubleVar(value=30.0)
-        self.height_var = tk.DoubleVar(value=30.0)
-        row = ttk.Frame(params)
-        row.pack(anchor="w")
-        ttk.Entry(row, textvariable=self.width_var, width=10).pack(side=tk.LEFT)
-        ttk.Entry(row, textvariable=self.height_var, width=10).pack(side=tk.LEFT, padx=4)
-        ttk.Label(params, text="# Rectangles").pack(anchor="w")
-        self.nrect_var = tk.IntVar(value=20)
-        ttk.Entry(params, textvariable=self.nrect_var, width=10).pack(anchor="w")
-        ttk.Label(params, text="Seed").pack(anchor="w")
-        self.seed_var = tk.IntVar(value=0)
-        ttk.Entry(params, textvariable=self.seed_var, width=10).pack(anchor="w")
-        ttk.Button(params, text="Generate/Refresh", command=self.refresh).pack(anchor="w", pady=6)
-        ttk.Separator(params, orient="horizontal").pack(fill="x", pady=6)
 
-        ttk.Label(params, text="Layout").pack(anchor="w")
+        # 1. General Settings
+        gen_frame = ttk.LabelFrame(params, text="General Settings", padding=4)
+        gen_frame.pack(fill="x", pady=(0, 6))
+        ttk.Label(gen_frame, text="Output dir").pack(anchor="w")
+        self.out_var = tk.StringVar(value="./dataset")
+        ttk.Entry(gen_frame, textvariable=self.out_var, width=28).pack(anchor="w")
+        ttk.Label(gen_frame, text="Scenario ID").pack(anchor="w")
+        self.scen_id_var = tk.IntVar(value=0)
+        ttk.Entry(gen_frame, textvariable=self.scen_id_var, width=10).pack(anchor="w")
+        ttk.Label(gen_frame, text="Seed").pack(anchor="w")
+        self.seed_var = tk.IntVar(value=0)
+        ttk.Entry(gen_frame, textvariable=self.seed_var, width=10).pack(anchor="w")
+        ttk.Label(gen_frame, text="Layout").pack(anchor="w")
         self.layout_var = tk.StringVar(value="union")
         ttk.Combobox(
-            params,
+            gen_frame,
             textvariable=self.layout_var,
             values=["union", "apartment"],
             state="readonly",
             width=12,
         ).pack(anchor="w")
+        ttk.Label(gen_frame, text="Width, Height").pack(anchor="w")
+        self.width_var = tk.DoubleVar(value=30.0)
+        self.height_var = tk.DoubleVar(value=30.0)
+        row_wh = ttk.Frame(gen_frame)
+        row_wh.pack(anchor="w")
+        ttk.Entry(row_wh, textvariable=self.width_var, width=10).pack(side=tk.LEFT)
+        ttk.Entry(row_wh, textvariable=self.height_var, width=10).pack(side=tk.LEFT, padx=4)
 
-        ttk.Label(params, text="Apartment rows, cols").pack(anchor="w")
-        self.apt_rows_var = tk.IntVar(value=2)
-        self.apt_cols_var = tk.IntVar(value=3)
-        row_apt = ttk.Frame(params)
-        row_apt.pack(anchor="w")
-        ttk.Entry(row_apt, textvariable=self.apt_rows_var, width=5).pack(side=tk.LEFT)
-        ttk.Entry(row_apt, textvariable=self.apt_cols_var, width=5).pack(
-            side=tk.LEFT, padx=4
+        # 2. Union Layout Scenarios
+        union_frame = ttk.LabelFrame(params, text="Union Layout Scenarios", padding=4)
+        union_frame.pack(fill="x", pady=(0, 6))
+        ttk.Label(union_frame, text="# Rectangles").pack(anchor="w")
+        self.nrect_var = tk.IntVar(value=20)
+        ttk.Entry(union_frame, textvariable=self.nrect_var, width=10).pack(anchor="w")
+
+        # 3. Apartment Layout Scenarios
+        apt_frame = ttk.LabelFrame(params, text="Apartment Layout Scenarios", padding=4)
+        apt_frame.pack(fill="x", pady=(0, 6))
+        ttk.Label(apt_frame, text="Apartment iterations").pack(anchor="w")
+        self.apt_iterations_var = tk.IntVar(value=4)
+        ttk.Spinbox(
+            apt_frame, textvariable=self.apt_iterations_var, from_=1, to=8, width=10
+        ).pack(anchor="w")
+
+        # Generate/Refresh
+        ttk.Button(params, text="Generate/Refresh Scenario", command=self.refresh).pack(
+            anchor="w", pady=6
         )
+        # Append to Dataset
+        ttk.Button(
+            params, text="Append to Dataset (Manual)", command=self.append_dataset
+        ).pack(anchor="w", pady=(0, 8))
 
-        ttk.Label(params, text="Apartment door prob").pack(anchor="w")
-        self.apt_door_prob_var = tk.DoubleVar(value=0.8)
-        ttk.Entry(params, textvariable=self.apt_door_prob_var, width=10).pack(
-            anchor="w"
-        )
-
-
-        # Lidar & sequence controls
-        ttk.Label(params, text="Seq steps").pack(anchor="w")
+        # 4. Other Settings
+        other_frame = ttk.LabelFrame(params, text="Other Settings", padding=4)
+        other_frame.pack(fill="x", pady=(0, 6))
+        ttk.Label(other_frame, text="Seq steps").pack(anchor="w")
         self.seq_steps_var = tk.IntVar(value=100)
-        ttk.Entry(params, textvariable=self.seq_steps_var, width=10).pack(anchor="w")
-
-        # Preview toggle
+        ttk.Entry(other_frame, textvariable=self.seq_steps_var, width=10).pack(anchor="w")
         self.preview_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
-            params,
+            other_frame,
             text="Preview planned path",
             variable=self.preview_var,
             command=self.draw_scene,
         ).pack(anchor="w")
-
-        # Complexity metrics
-        ttk.Separator(params, orient="horizontal").pack(fill="x", pady=6)
-        ttk.Label(params, text="Complexity").pack(anchor="w")
+        ttk.Label(other_frame, text="Complexity").pack(anchor="w")
         self.comp_text = tk.StringVar(value="?")
-        ttk.Label(params, textvariable=self.comp_text, justify="left").pack(anchor="w")
-
-        # Actions
-        ttk.Separator(params, orient="horizontal").pack(fill="x", pady=6)
-        ttk.Button(
-            params, text="Append to Dataset (Manual)", command=self.append_dataset
-        ).pack(anchor="w", pady=8)
+        ttk.Label(other_frame, textvariable=self.comp_text, justify="left").pack(anchor="w")
         self.status = tk.StringVar(
-            value="Click to set Start (left click) and Goal (right click)"
+            value="Set Start (left click), Goal (right-click or Control+click)"
         )
-        ttk.Label(params, textvariable=self.status, wraplength=220).pack(
-            anchor="w", pady=6
+        ttk.Label(other_frame, textvariable=self.status, wraplength=220).pack(
+            anchor="w", pady=4
         )
 
         # Plot
@@ -126,9 +122,7 @@ class ManualGUI(tk.Tk):
             n_rects=self.nrect_var.get(),
             seed=self.seed_var.get(),
             layout=self.layout_var.get(),
-            apt_rows=self.apt_rows_var.get(),
-            apt_cols=self.apt_cols_var.get(),
-            apt_door_prob=self.apt_door_prob_var.get(),
+            apt_iterations=self.apt_iterations_var.get(),
         )
         # Geometry + interior mask (union of rectangles)
         self.segments, self.spec, self.interior, self.grid_res = generate_scenario(spec)
@@ -156,15 +150,57 @@ class ManualGUI(tk.Tk):
         self.start = None
         self.goal = None
         self.preview_path = None
-        self.status.set("Pick Start (left click) and Goal (right click)")
+        self.status.set("Pick Start (left click), Goal (right-click or Control+click)")
 
     def draw_scene(self):
         self.ax.clear()
         if self.spec is not None:
             self.ax.set_xlim(0, self.spec.width)
             self.ax.set_ylim(0, self.spec.height)
-        for s in self.segments:
-            self.ax.plot([s.x1, s.x2], [s.y1, s.y2], linewidth=1)
+        layout = getattr(self.spec, "layout", "union")
+        if layout == "apartment":
+            layout_data = get_apartment_layout_data(self.spec) if self.spec else None
+            if layout_data is not None:
+                rooms, doors = layout_data
+                door_width = 0.8
+                half_door = door_width / 2.0
+                for i, r in enumerate(rooms):
+                    rect = mpatches.Rectangle(
+                        (r.x, r.y), r.width, r.height,
+                        linewidth=3, edgecolor="#333333", facecolor="#f9f9f9"
+                    )
+                    self.ax.add_patch(rect)
+                    self.ax.text(
+                        r.x + r.width / 2, r.y + r.height / 2, f"Room {i + 1}",
+                        ha="center", va="center", fontweight="bold", color="#555555"
+                    )
+                for dx, dy, orientation in doors:
+                    if orientation == "vertical":
+                        self.ax.plot(
+                            [dx, dx], [dy - half_door, dy + half_door],
+                            color="white", linewidth=4, zorder=3
+                        )
+                        arc = mpatches.Arc(
+                            (dx, dy - half_door), door_width * 2, door_width * 2,
+                            theta1=0, theta2=90, color="blue", linewidth=1.5, zorder=4
+                        )
+                        self.ax.add_patch(arc)
+                    else:
+                        self.ax.plot(
+                            [dx - half_door, dx + half_door], [dy, dy],
+                            color="white", linewidth=4, zorder=3
+                        )
+                        arc = mpatches.Arc(
+                            (dx - half_door, dy), door_width * 2, door_width * 2,
+                            theta1=270, theta2=360, color="blue", linewidth=1.5, zorder=4
+                        )
+                        self.ax.add_patch(arc)
+            else:
+                for s in self.segments:
+                    self.ax.plot([s.x1, s.x2], [s.y1, s.y2], linewidth=1)
+        else:
+            for s in self.segments:
+                self.ax.plot([s.x1, s.x2], [s.y1, s.y2], linewidth=1)
         if self.preview_var.get() and self.preview_path:
             xs = [p[0] for p in self.preview_path]
             ys = [p[1] for p in self.preview_path]
@@ -189,12 +225,21 @@ class ManualGUI(tk.Tk):
             if self.occ[gy, gx]:
                 self.status.set("Please click inside free interior (not on walls or outside).")
                 return
-        if event.button == 1:  # left -> start
+        # Primary click = Start; secondary click = Goal.
+        # On macOS: right-click may be reported as button 2 or 3; Control+click is secondary.
+        is_secondary = (
+            event.button == 3
+            or event.button == 2
+            or (event.button == 1 and getattr(event, "key", None) == "control")
+        )
+        if event.button == 1 and not (
+            getattr(event, "key", None) == "control"
+        ):
             self.start = (x, y)
             self.status.set(
-                f"Start set to ({x:.2f}, {y:.2f}). Now right-click to set Goal."
+                f"Start set to ({x:.2f}, {y:.2f}). Right-click or Control+click to set Goal."
             )
-        elif event.button == 3:  # right -> goal
+        elif is_secondary:
             self.goal = (x, y)
             self.status.set(
                 f"Goal set to ({x:.2f}, {y:.2f}). Press 'Append to Dataset'."
@@ -217,7 +262,7 @@ class ManualGUI(tk.Tk):
         if self.start is None or self.goal is None:
             messagebox.showwarning(
                 "Missing points",
-                "Please set both Start (left-click) and Goal (right-click).",
+                "Please set both Start (left-click) and Goal (right-click or Control+click).",
             )
             return
         # Build generator with chosen params; note: same seed+scenario_id used for determinism
@@ -228,9 +273,7 @@ class ManualGUI(tk.Tk):
             n_rects=self.spec.n_rects,
             seed=self.spec.seed,
             layout=self.spec.layout,
-            apt_rows=self.spec.apt_rows,
-            apt_cols=self.spec.apt_cols,
-            apt_door_prob=self.spec.apt_door_prob,
+            apt_iterations=getattr(self.spec, "apt_iterations", 4),
         )
         lidar = LidarSpec()  # defaults
         cfg = AutoGenConfig(

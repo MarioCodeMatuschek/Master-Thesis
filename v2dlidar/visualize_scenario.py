@@ -23,8 +23,9 @@ import os
 from typing import Optional, Tuple, List, Dict
 
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 
-from .mapgen import ScenarioSpec, generate_scenario
+from .mapgen import ScenarioSpec, generate_scenario, get_apartment_layout_data
 
 
 def load_scenario_spec(scenario_dir: str) -> ScenarioSpec:
@@ -92,9 +93,51 @@ def plot_scenario(
 
     fig, ax = plt.subplots(figsize=(6, 6))
 
-    # Plot walls
-    for s in segments:
-        ax.plot([s.x1, s.x2], [s.y1, s.y2], color="black", linewidth=1)
+    # Plot walls: apartment layout uses rooms + doors; union uses segments
+    layout = getattr(scen_spec, "layout", "union")
+    if layout == "apartment":
+        layout_data = get_apartment_layout_data(scen_spec)
+        if layout_data is not None:
+            rooms, doors = layout_data
+            door_width = 0.8
+            half_door = door_width / 2.0
+            for i, r in enumerate(rooms):
+                rect = mpatches.Rectangle(
+                    (r.x, r.y), r.width, r.height,
+                    linewidth=3, edgecolor="#333333", facecolor="#f9f9f9"
+                )
+                ax.add_patch(rect)
+                ax.text(
+                    r.x + r.width / 2, r.y + r.height / 2, f"Room {i + 1}",
+                    ha="center", va="center", fontweight="bold", color="#555555"
+                )
+            for dx, dy, orientation in doors:
+                if orientation == "vertical":
+                    ax.plot(
+                        [dx, dx], [dy - half_door, dy + half_door],
+                        color="white", linewidth=4, zorder=3
+                    )
+                    arc = mpatches.Arc(
+                        (dx, dy - half_door), door_width * 2, door_width * 2,
+                        theta1=0, theta2=90, color="blue", linewidth=1.5, zorder=4
+                    )
+                    ax.add_patch(arc)
+                else:
+                    ax.plot(
+                        [dx - half_door, dx + half_door], [dy, dy],
+                        color="white", linewidth=4, zorder=3
+                    )
+                    arc = mpatches.Arc(
+                        (dx - half_door, dy), door_width * 2, door_width * 2,
+                        theta1=270, theta2=360, color="blue", linewidth=1.5, zorder=4
+                    )
+                    ax.add_patch(arc)
+        else:
+            for s in segments:
+                ax.plot([s.x1, s.x2], [s.y1, s.y2], color="black", linewidth=1)
+    else:
+        for s in segments:
+            ax.plot([s.x1, s.x2], [s.y1, s.y2], color="black", linewidth=1)
 
     # Plot ideal path for a specific scan, if provided
     if scan_path is not None:

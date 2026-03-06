@@ -3,6 +3,53 @@ from typing import List, Tuple, Optional
 import numpy as np
 from .geometry import Segment, bresenham_line
 
+
+def free_space_connected_components(
+    segments: List[Segment],
+    width: float,
+    height: float,
+    res: float,
+    interior: Optional[np.ndarray] = None,
+    thickness: float = 0.15,
+) -> Tuple[int, int]:
+    """
+    Build occupancy from segments (and optional interior mask), then count
+    connected components of free (traversable) cells using 4-connectivity.
+
+    Returns
+    -------
+    n_components : int
+        Number of connected components of free space.
+    n_free : int
+        Total number of free cells (occ==0 and inside interior if provided).
+    """
+    occ, _ = occupancy_from_segments(segments, width, height, res, thickness)
+    if interior is not None:
+        occ = occ.copy()
+        occ[interior == 0] = 1
+    H, W = occ.shape
+    nbrs4 = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+    visited = np.zeros_like(occ, dtype=np.uint8)
+    n_components = 0
+    n_free = 0
+    for sy in range(H):
+        for sx in range(W):
+            if occ[sy, sx] or visited[sy, sx]:
+                continue
+            n_components += 1
+            stack = [(sx, sy)]
+            visited[sy, sx] = 1
+            while stack:
+                x, y = stack.pop()
+                n_free += 1
+                for dx, dy in nbrs4:
+                    nx, ny = x + dx, y + dy
+                    if 0 <= nx < W and 0 <= ny < H and not occ[ny, nx] and not visited[ny, nx]:
+                        visited[ny, nx] = 1
+                        stack.append((nx, ny))
+    return n_components, n_free
+
+
 def occupancy_from_segments(segments: List[Segment], width: float, height: float, res: float, thickness: float=0.15):
     W = int(np.ceil(width/res)); H = int(np.ceil(height/res))
     occ = np.zeros((H, W), dtype=np.uint8)

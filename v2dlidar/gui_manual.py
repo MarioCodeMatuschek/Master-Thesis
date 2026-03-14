@@ -164,37 +164,23 @@ class ManualGUI(tk.Tk):
                 rooms, doors = layout_data
                 door_width = 0.8
                 half_door = door_width / 2.0
-                for i, r in enumerate(rooms):
+                for r in rooms:
                     rect = mpatches.Rectangle(
                         (r.x, r.y), r.width, r.height,
                         linewidth=3, edgecolor="#333333", facecolor="#f9f9f9"
                     )
                     self.ax.add_patch(rect)
-                    self.ax.text(
-                        r.x + r.width / 2, r.y + r.height / 2, f"Room {i + 1}",
-                        ha="center", va="center", fontweight="bold", color="#555555"
-                    )
-                for dx, dy, orientation in doors:
+                for dx, dy, orientation, _ in doors:
                     if orientation == "vertical":
                         self.ax.plot(
                             [dx, dx], [dy - half_door, dy + half_door],
                             color="white", linewidth=4, zorder=3
                         )
-                        arc = mpatches.Arc(
-                            (dx, dy - half_door), door_width * 2, door_width * 2,
-                            theta1=0, theta2=90, color="blue", linewidth=1.5, zorder=4
-                        )
-                        self.ax.add_patch(arc)
                     else:
                         self.ax.plot(
                             [dx - half_door, dx + half_door], [dy, dy],
                             color="white", linewidth=4, zorder=3
                         )
-                        arc = mpatches.Arc(
-                            (dx - half_door, dy), door_width * 2, door_width * 2,
-                            theta1=270, theta2=360, color="blue", linewidth=1.5, zorder=4
-                        )
-                        self.ax.add_patch(arc)
             else:
                 for s in self.segments:
                     self.ax.plot([s.x1, s.x2], [s.y1, s.y2], linewidth=1)

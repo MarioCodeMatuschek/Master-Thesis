@@ -87,8 +87,11 @@ def plot_scenario(
     scen_spec: ScenarioSpec,
     show_pose: Optional[Tuple[float, float, float]] = None,
     scan_path: Optional[Dict[str, object]] = None,
+    save_path: Optional[str] = None,
+    title_extra: Optional[str] = None,
 ) -> None:
-    """Plot the scenario walls and optionally a LiDAR pose and ideal path."""
+    """Plot the scenario walls and optionally a LiDAR pose and ideal path.
+    If save_path is set, save the figure to that path. If title_extra is set, append it to the title."""
     segments, spec, _, _ = generate_scenario(scen_spec)
 
     fig, ax = plt.subplots(figsize=(6, 6))
@@ -101,37 +104,23 @@ def plot_scenario(
             rooms, doors = layout_data
             door_width = 0.8
             half_door = door_width / 2.0
-            for i, r in enumerate(rooms):
+            for r in rooms:
                 rect = mpatches.Rectangle(
                     (r.x, r.y), r.width, r.height,
                     linewidth=3, edgecolor="#333333", facecolor="#f9f9f9"
                 )
                 ax.add_patch(rect)
-                ax.text(
-                    r.x + r.width / 2, r.y + r.height / 2, f"Room {i + 1}",
-                    ha="center", va="center", fontweight="bold", color="#555555"
-                )
-            for dx, dy, orientation in doors:
+            for dx, dy, orientation, _ in doors:
                 if orientation == "vertical":
                     ax.plot(
                         [dx, dx], [dy - half_door, dy + half_door],
                         color="white", linewidth=4, zorder=3
                     )
-                    arc = mpatches.Arc(
-                        (dx, dy - half_door), door_width * 2, door_width * 2,
-                        theta1=0, theta2=90, color="blue", linewidth=1.5, zorder=4
-                    )
-                    ax.add_patch(arc)
                 else:
                     ax.plot(
                         [dx - half_door, dx + half_door], [dy, dy],
                         color="white", linewidth=4, zorder=3
                     )
-                    arc = mpatches.Arc(
-                        (dx - half_door, dy), door_width * 2, door_width * 2,
-                        theta1=270, theta2=360, color="blue", linewidth=1.5, zorder=4
-                    )
-                    ax.add_patch(arc)
         else:
             for s in segments:
                 ax.plot([s.x1, s.x2], [s.y1, s.y2], color="black", linewidth=1)
@@ -177,14 +166,20 @@ def plot_scenario(
     ax.set_xlim(0, spec.width)
     ax.set_ylim(0, spec.height)
     ax.set_aspect("equal", adjustable="box")
-    ax.set_title("Scenario visualization")
+    title = "Scenario visualization"
+    if title_extra:
+        title = f"{title} — {title_extra}"
+    ax.set_title(title)
     ax.set_xlabel("x [m]")
     ax.set_ylabel("y [m]")
     ax.invert_yaxis()  # match the GUI convention
     if scan_path is not None:
         ax.legend(loc="best")
     plt.tight_layout()
-    plt.show()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    if save_path is None:
+        plt.show()
 
 
 def main() -> None:

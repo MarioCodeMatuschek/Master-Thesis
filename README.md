@@ -215,27 +215,27 @@ python3.12 -m v2dlidar.visualize_scenario --root ./dataset_10x1 --scenario_id 0 
 
 
 
-ToDO:
+## ToDOs:
 
-1. Remove the room numbering from the apartment layout generator
+DONE - Remove the room numbering from the apartment layout generator
 
 2. Currently, in the case of many rooms in the apartment scenarios, doors are weirdly placed where they should not be. This should be fixed as well
 
-3. Make sure the A* path planner works as indented and respects walls of rooms in the apartment scenarios
+3. Test if all the other lidar sensor dataset generation cases still work as indendet (rooms vs. segments will be interesting to evaluate)
 
-4. Test if all the other lidar sensor dataset generation cases still work as indendet (rooms vs. segments will be interesting to evaluate)
-
-Other ToDos:
-
-1. Lidar Similieren der aktuellen virtuellen Map
+4. Lidar Similieren der aktuellen virtuellen Map
   hierbei auch berücksichtigen dass die measurements noisy (Gaussian) sein müssen
   potenziel muss auch noch vibration noise, motor harmonics berücksichtigt werden
 
-(Siehe Codex suggestion left) 2. Die Szenarien "einfacher" machen (wie eine Art Floorplan einer Wohnung von oben)
+5. Die Szenarien "einfacher" machen (wie eine Art Floorplan einer Wohnung von oben)
 
-3. Mit Joe real-life scenarios nachstellen
+6. Mit Joe real-life scenarios nachstellen
 
-4. diese dann virtuell abbilden und dann im practical work abgleich
+7. diese dann virtuell abbilden und dann im practical work abgleich
   vermutung - starke unterschiede (virtuell womöglich viel ausfall)
 
 DONE 5. Metrik durchdenken für den abgleich physisch vs. virtuell
+
+Optional further ToDos:
+
+Make sure the A* path planner works as indented and respects walls of rooms in the apartment scenarios

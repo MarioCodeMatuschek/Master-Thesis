@@ -20,7 +20,7 @@ class ScenarioSpec:
     apt_cols: int = 3   # room grid cols
     apt_door_prob: float = 0.8  # chance of doorway between adjacent rooms
     apt_min_door_width: float = 0.6  # min door gap (m); should exceed 2× occupancy wall thickness (~0.15 m) so doors stay traversable after inflation
-    apt_verify_connectivity: bool = False  # if True, check that free space is one connected component after generation
+    apt_verify_connectivity: bool = True  # if True, ensure every room has >=2 connections and free space is one connected component
     apt_iterations: int = 4  # BSP split iterations for apartment layout (number of recursive splits)
 
 def _rect_edges(cx, cy, w, h, yaw):
@@ -226,6 +226,139 @@ def _apt_find_shared_wall(r1: _AptRoom, r2: _AptRoom):
     return None
 
 
+def _apt_shared_wall_extent(r1: _AptRoom, r2: _AptRoom, tol: float = 0.1):
+    """
+    If two rooms share a wall, returns (orientation, line_value, range_lo, range_hi).
+    For vertical: line_value is x, range is (y_lo, y_hi). For horizontal: line_value is y, range is (x_lo, x_hi).
+    Otherwise returns None.
+    """
+    # Vertical shared wall
+    if abs((r1.x + r1.width) - r2.x) < tol or abs((r2.x + r2.width) - r1.x) < tol:
+        overlap_y_start = max(r1.y, r2.y)
+        overlap_y_end = min(r1.y + r1.height, r2.y + r2.height)
+        if overlap_y_start < overlap_y_end:
+            door_x = r2.x if abs((r1.x + r1.width) - r2.x) < tol else r1.x
+            return ("vertical", door_x, overlap_y_start, overlap_y_end)
+    # Horizontal shared wall
+    if abs((r1.y + r1.height) - r2.y) < tol or abs((r2.y + r2.height) - r1.y) < tol:
+        overlap_x_start = max(r1.x, r2.x)
+        overlap_x_end = min(r1.x + r1.width, r2.x + r2.width)
+        if overlap_x_start < overlap_x_end:
+            door_y = r2.y if abs((r1.y + r1.height) - r2.y) < tol else r1.y
+            return ("horizontal", door_y, overlap_x_start, overlap_x_end)
+    return None
+
+
+def _merge_intervals(intervals: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    """Merge overlapping (start, end) intervals; returns sorted disjoint intervals."""
+    if not intervals:
+        return []
+    sorted_ivals = sorted(intervals, key=lambda p: p[0])
+    merged: List[Tuple[float, float]] = [sorted_ivals[0]]
+    for a, b in sorted_ivals[1:]:
+        if a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return merged
+
+
+# Minimum door width for fallback doors; must exceed 2× occupancy thickness (0.15 m) so gaps stay open in grid.
+_APT_MIN_DOOR_FLOOR = 0.6
+
+
+def _apt_door_position_clean(
+    r1: _AptRoom,
+    r2: _AptRoom,
+    all_rooms: List[_AptRoom],
+    min_door_width: float,
+    tol: float = 0.1,
+) -> Optional[Tuple[float, float, str, float]]:
+    """
+    Place a door on a clean wall segment (not at T-junctions). Returns
+    (dx, dy, orientation, width_used) or None only when there is no clean segment.
+    When the largest clean segment is shorter than min_door_width + 2*margin, uses
+    a narrow door with width_used = max(min_door_floor, L - 2*margin).
+    """
+    margin = tol
+    min_len = min_door_width + 2 * margin
+    min_narrow = 2 * margin
+
+    def _clean_intervals_full(
+        overlap_start: float,
+        overlap_end: float,
+        merged_other: List[Tuple[float, float]],
+    ) -> List[Tuple[float, float]]:
+        """All clean sub-intervals (any positive length)."""
+        out: List[Tuple[float, float]] = []
+        cur = overlap_start
+        for a, b in merged_other:
+            if cur < a:
+                out.append((cur, a))
+            cur = max(cur, b)
+        if cur < overlap_end:
+            out.append((cur, overlap_end))
+        return out
+
+    # Vertical shared wall
+    if abs((r1.x + r1.width) - r2.x) < tol or abs((r2.x + r2.width) - r1.x) < tol:
+        overlap_y_start = max(r1.y, r2.y)
+        overlap_y_end = min(r1.y + r1.height, r2.y + r2.height)
+        if overlap_y_start >= overlap_y_end:
+            return None
+        door_x = r2.x if abs((r1.x + r1.width) - r2.x) < tol else r1.x
+        other_intervals: List[Tuple[float, float]] = []
+        for r in all_rooms:
+            if r is r1 or r is r2:
+                continue
+            if abs(r.x - door_x) >= tol and abs((r.x + r.width) - door_x) >= tol:
+                continue
+            low = max(r.y, overlap_y_start)
+            high = min(r.y + r.height, overlap_y_end)
+            if low < high:
+                other_intervals.append((low, high))
+        merged = _merge_intervals(other_intervals)
+        clean_full = _clean_intervals_full(overlap_y_start, overlap_y_end, merged)
+        if not clean_full:
+            return None
+        best = max(clean_full, key=lambda p: p[1] - p[0])
+        L = best[1] - best[0]
+        if L < min_narrow:
+            return None
+        mid_y = (best[0] + best[1]) / 2
+        width_used = min_door_width if L >= min_len else max(_APT_MIN_DOOR_FLOOR, L - 2 * margin)
+        return (door_x, mid_y, "vertical", width_used)
+    # Horizontal shared wall
+    if abs((r1.y + r1.height) - r2.y) < tol or abs((r2.y + r2.height) - r1.y) < tol:
+        overlap_x_start = max(r1.x, r2.x)
+        overlap_x_end = min(r1.x + r1.width, r2.x + r2.width)
+        if overlap_x_start >= overlap_x_end:
+            return None
+        door_y = r2.y if abs((r1.y + r1.height) - r2.y) < tol else r1.y
+        other_intervals = []
+        for r in all_rooms:
+            if r is r1 or r is r2:
+                continue
+            if abs(r.y - door_y) >= tol and abs((r.y + r.height) - door_y) >= tol:
+                continue
+            low = max(r.x, overlap_x_start)
+            high = min(r.x + r.width, overlap_x_end)
+            if low < high:
+                other_intervals.append((low, high))
+        merged = _merge_intervals(other_intervals)
+        clean_full = _clean_intervals_full(overlap_x_start, overlap_x_end, merged)
+        if not clean_full:
+            return None
+        best = max(clean_full, key=lambda p: p[1] - p[0])
+        L = best[1] - best[0]
+        if L < min_narrow:
+            return None
+        mid_x = (best[0] + best[1]) / 2
+        width_used = min_door_width if L >= min_len else max(_APT_MIN_DOOR_FLOOR, L - 2 * margin)
+        return (mid_x, door_y, "horizontal", width_used)
+    return None
+
+
 def _apt_split_space(room: _AptRoom, rng: random.Random, min_size: float = 2.5) -> List[_AptRoom]:
     """Split one room along the longer axis; returns [room] or [r1, r2]."""
     split_vertically = room.width > room.height
@@ -245,41 +378,46 @@ def _apt_split_space(room: _AptRoom, rng: random.Random, min_size: float = 2.5) 
 
 
 def _generate_apartment_bsp(
-    width: float, height: float, iterations: int, rng: random.Random
-) -> Tuple[List[_AptRoom], List[Tuple[float, float, str]]]:
+    width: float,
+    height: float,
+    iterations: int,
+    rng: random.Random,
+    min_door_width: float = 0.6,
+) -> Tuple[List[_AptRoom], List[Tuple[float, float, str, float]], List[Tuple[_AptRoom, _AptRoom]]]:
     """
-    BSP apartment generator. Returns (rooms, doors) where doors are
-    (x_or_mid_x, y_or_mid_y, "vertical"|"horizontal").
+    BSP apartment generator. Returns (rooms, doors, sibling_pairs). Doors are
+    (dx, dy, orientation, width_used). Doors are placed on clean wall segments;
+    narrow segments are used when no full-width segment exists.
     """
     rooms: List[_AptRoom] = [_AptRoom(0, 0, width, height)]
-    doors: List[Tuple[float, float, str]] = []
+    sibling_pairs: List[Tuple[_AptRoom, _AptRoom]] = []
     for _ in range(iterations):
         new_rooms: List[_AptRoom] = []
         for r in rooms:
             res = _apt_split_space(r, rng)
             if len(res) > 1:
-                door = _apt_find_shared_wall(res[0], res[1])
-                if door is not None:
-                    doors.append(door)
+                sibling_pairs.append((res[0], res[1]))
                 new_rooms.extend(res)
             else:
                 new_rooms.append(r)
         rooms = new_rooms
-    return rooms, doors
+    doors: List[Tuple[float, float, str, float]] = []
+    for r1, r2 in sibling_pairs:
+        door = _apt_door_position_clean(r1, r2, rooms, min_door_width)
+        if door is not None:
+            doors.append(door)
+    return rooms, doors, sibling_pairs
 
 
-def get_apartment_layout_data(spec: ScenarioSpec) -> Optional[Tuple[List[_AptRoom], List[Tuple[float, float, str]]]]:
+def get_apartment_layout_data(spec: ScenarioSpec) -> Optional[Tuple[List[_AptRoom], List[Tuple[float, float, str, float]]]]:
     """
     Return (rooms, doors) for apartment layout visualization only.
-    Uses the same BSP as _generate_apartment_scenario so drawing matches the generated segments.
+    Uses the same resolver as _generate_apartment_scenario so drawing matches the generated segments.
     Returns None if spec.layout != "apartment".
     """
     if getattr(spec, "layout", "union") != "apartment":
         return None
-    random.seed(spec.seed)
-    rng = random.Random(spec.seed)
-    iterations = max(1, getattr(spec, "apt_iterations", 4))
-    rooms, doors = _generate_apartment_bsp(spec.width, spec.height, iterations, rng)
+    rooms, doors, _ = _resolve_apartment_rooms_and_doors(spec)
     return (rooms, doors)
 
 
@@ -323,36 +461,19 @@ def _apt_wall_extent_for_door(
         return (dx - 0.5, dx + 0.5)
 
 
-def _generate_apartment_scenario(spec: ScenarioSpec):
-    """
-    Build an apartment-like floorplan using BSP (binary space partitioning):
-    recursively split the space along the longer axis and place a door between
-    each pair of sibling rooms. Matches the layout produced by apartment_scenario_generator.py.
-
-    Returns (segments, spec, interior, res) with the same structure as _generate_union_scenario.
-    """
-    random.seed(spec.seed)
-    rng = random.Random(spec.seed)
-
-    res = max(1e-3, float(spec.outline_res))
-    W = int(math.ceil(spec.width / res))
-    H = int(math.ceil(spec.height / res))
-    interior = np.ones((H, W), dtype=np.uint8)
-
-    iterations = max(1, getattr(spec, "apt_iterations", 4))
-    min_door_width = float(getattr(spec, "apt_min_door_width", 0.6))
+def _apartment_segments_from_doors(
+    rooms: List[_AptRoom],
+    doors: List[Tuple[float, float, str, float]],
+    width: float,
+    height: float,
+) -> List[Segment]:
+    """Build wall segments from rooms and door list; outer boundary plus wall segments with gaps at each door. Each door is (dx, dy, orientation, width_used)."""
     eps = 1e-6
-
-    rooms, doors = _generate_apartment_bsp(spec.width, spec.height, iterations, rng)
-
     segments: List[Segment] = []
-    segments += _rect_edges(
-        spec.width / 2.0, spec.height / 2.0, spec.width, spec.height, 0.0
-    )
-
-    half_gap = min_door_width / 2.0
+    segments += _rect_edges(width / 2.0, height / 2.0, width, height, 0.0)
     for door in doors:
-        dx, dy, orientation = door
+        dx, dy, orientation, width_used = door
+        half_gap = width_used / 2.0
         if orientation == "vertical":
             y_min, y_max = _apt_wall_extent_for_door(rooms, dx, dy, "vertical")
             if y_min < dy - half_gap - eps:
@@ -365,8 +486,199 @@ def _generate_apartment_scenario(spec: ScenarioSpec):
                 segments.append(Segment(x_min, dy, dx - half_gap, dy))
             if dx + half_gap + eps < x_max:
                 segments.append(Segment(dx + half_gap, dy, x_max, dy))
+    return segments
 
-    if getattr(spec, "apt_verify_connectivity", False):
+
+def _door_on_wall_between(door: Tuple[float, float, str, float], r1: _AptRoom, r2: _AptRoom, tol: float = 0.1) -> bool:
+    """True if door lies on the shared wall segment between r1 and r2 (same line and within extent)."""
+    extent = _apt_shared_wall_extent(r1, r2, tol)
+    if extent is None or door[2] != extent[0]:
+        return False
+    orient, line_val, range_lo, range_hi = extent
+    if orient == "vertical":
+        return (
+            abs(door[0] - line_val) < tol
+            and range_lo <= door[1] + tol
+            and door[1] - tol <= range_hi
+        )
+    else:
+        return (
+            abs(door[1] - line_val) < tol
+            and range_lo <= door[0] + tol
+            and door[0] - tol <= range_hi
+        )
+
+
+def _count_adjacent_rooms(r: _AptRoom, rooms: List[_AptRoom], tol: float = 0.1) -> int:
+    """Number of other rooms that share a wall with r."""
+    n = 0
+    for other in rooms:
+        if other is r:
+            continue
+        if _apt_find_shared_wall(r, other) is not None:
+            n += 1
+    return n
+
+
+def _room_required_connections(r: _AptRoom, rooms: List[_AptRoom]) -> int:
+    """Required number of distinct neighbors r must have a door to: at least 2, or 1 if r has only 1 adjacent room."""
+    adj = _count_adjacent_rooms(r, rooms)
+    return min(2, adj) if adj >= 1 else 0
+
+
+def _room_has_door(
+    r: _AptRoom,
+    rooms: List[_AptRoom],
+    doors: List[Tuple[float, float, str, float]],
+    tol: float = 0.1,
+) -> bool:
+    """True if room r has at least the required number of doors to distinct neighbors (2 when possible, else 1)."""
+    required = _room_required_connections(r, rooms)
+    return _room_neighbor_count(r, rooms, doors, tol) >= required
+
+
+def _room_neighbor_count(
+    r: _AptRoom,
+    rooms: List[_AptRoom],
+    doors: List[Tuple[float, float, str, float]],
+    tol: float = 0.1,
+) -> int:
+    """Number of distinct rooms that r is connected to via at least one door on the shared wall."""
+    n = 0
+    for other in rooms:
+        if other is r:
+            continue
+        if any(_door_on_wall_between(d, r, other, tol) for d in doors):
+            n += 1
+    return n
+
+
+def _resolve_apartment_rooms_and_doors(
+    spec: ScenarioSpec,
+) -> Tuple[List[_AptRoom], List[Tuple[float, float, str, float]], float]:
+    """
+    Resolve (rooms, doors) for apartment layout. When apt_verify_connectivity is True,
+    ensures: (1) every room has at least min(2, number of adjacent rooms) connections
+    (doors to that many distinct neighbors—2 when possible, else 1), (2) free space is
+    one connected component. Adds fallback doors for sibling pairs and for rooms with
+    too few connections. Returns (rooms, doors, effective_min_door_width).
+    Doors are (dx, dy, orientation, width_used).
+    """
+    width = spec.width
+    height = spec.height
+    iterations = max(1, getattr(spec, "apt_iterations", 4))
+    effective_min_door_width = float(getattr(spec, "apt_min_door_width", 0.6))
+    verify = getattr(spec, "apt_verify_connectivity", True)
+    res = max(1e-3, float(spec.outline_res))
+    W = int(math.ceil(width / res))
+    H = int(math.ceil(height / res))
+    interior = np.ones((H, W), dtype=np.uint8)
+    min_door_floor = _APT_MIN_DOOR_FLOOR
+    tol = 0.1
+
+    while True:
+        random.seed(spec.seed)
+        rng = random.Random(spec.seed)
+        rooms, doors, sibling_pairs = _generate_apartment_bsp(
+            width, height, iterations, rng,
+            min_door_width=effective_min_door_width,
+        )
+        if verify:
+            # Ensure every room has at least min(2, adj_count) connections (2 when ≥2 adjacent rooms, else 1)
+            while not all(_room_neighbor_count(r, rooms, doors, tol) >= _room_required_connections(r, rooms) for r in rooms):
+                added = False
+                for r in rooms:
+                    if _room_neighbor_count(r, rooms, doors, tol) >= _room_required_connections(r, rooms):
+                        continue
+                    for other in rooms:
+                        if other is r:
+                            continue
+                        if any(_door_on_wall_between(d, r, other, tol) for d in doors):
+                            continue  # already have a door to this neighbor
+                        wall = _apt_find_shared_wall(r, other)
+                        if wall is None:
+                            continue
+                        dx, dy, orient = wall
+                        doors.append((dx, dy, orient, min_door_floor))
+                        added = True
+                        break
+                    if added:
+                        break
+                if not added:
+                    break
+        segments = _apartment_segments_from_doors(rooms, doors, width, height)
+        if not verify:
+            return (rooms, doors, effective_min_door_width)
+        from .planner import free_space_connected_components
+        n_comp, _ = free_space_connected_components(
+            segments, width, height, res, interior=interior
+        )
+        if n_comp == 1:
+            return (rooms, doors, effective_min_door_width)
+        # Fallback: add midpoint door for any sibling pair that has no door
+        for r1, r2 in sibling_pairs:
+            if any(_door_on_wall_between(d, r1, r2, tol) for d in doors):
+                continue
+            fallback = _apt_find_shared_wall(r1, r2)
+            if fallback is not None:
+                dx, dy, orient = fallback
+                doors.append((dx, dy, orient, min_door_floor))
+        # Room-level: ensure every room has at least min(2, adj_count) connections
+        while not all(_room_neighbor_count(r, rooms, doors, tol) >= _room_required_connections(r, rooms) for r in rooms):
+            added = False
+            for r in rooms:
+                if _room_neighbor_count(r, rooms, doors, tol) >= _room_required_connections(r, rooms):
+                    continue
+                for other in rooms:
+                    if other is r:
+                        continue
+                    if any(_door_on_wall_between(d, r, other, tol) for d in doors):
+                        continue
+                    wall = _apt_find_shared_wall(r, other)
+                    if wall is None:
+                        continue
+                    dx, dy, orient = wall
+                    doors.append((dx, dy, orient, min_door_floor))
+                    added = True
+                    break
+                if added:
+                    break
+            if not added:
+                break
+        segments = _apartment_segments_from_doors(rooms, doors, width, height)
+        n_comp, _ = free_space_connected_components(
+            segments, width, height, res, interior=interior
+        )
+        if n_comp == 1:
+            return (rooms, doors, effective_min_door_width)
+        if effective_min_door_width <= min_door_floor:
+            import warnings
+            warnings.warn(
+                f"Apartment scenario free space has {n_comp} connected components (expected 1). Layout may have enclosed rooms."
+            )
+            return (rooms, doors, effective_min_door_width)
+        effective_min_door_width = max(
+            min_door_floor, effective_min_door_width - 0.1
+        )
+
+
+def _generate_apartment_scenario(spec: ScenarioSpec):
+    """
+    Build an apartment-like floorplan using BSP (binary space partitioning):
+    recursively split the space along the longer axis and place a door between
+    each pair of sibling rooms. Matches the layout produced by apartment_scenario_generator.py.
+
+    Returns (segments, spec, interior, res) with the same structure as _generate_union_scenario.
+    """
+    rooms, doors, _ = _resolve_apartment_rooms_and_doors(spec)
+    res = max(1e-3, float(spec.outline_res))
+    W = int(math.ceil(spec.width / res))
+    H = int(math.ceil(spec.height / res))
+    interior = np.ones((H, W), dtype=np.uint8)
+
+    segments = _apartment_segments_from_doors(rooms, doors, spec.width, spec.height)
+
+    if getattr(spec, "apt_verify_connectivity", True):
         from .planner import free_space_connected_components
         n_comp, _ = free_space_connected_components(
             segments, spec.width, spec.height, res, interior=interior

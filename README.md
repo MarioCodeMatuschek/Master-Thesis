@@ -256,8 +256,10 @@ DONE 5. Metrik durchdenken für den abgleich physisch vs. virtuell
 
 7. Make sure the A* path planner works as indented and respects walls of rooms in the apartment scenarios
 
-8. Mit Joe real-life scenarios nachstellen
+8. Make sure the manually created samples are properly appended to a shared dataset folder (additional scenario in dataset folder with same documents required scans_long.csv, meta.json and scan paths for the different orientations, sequences if requested)
 
-9. diese dann virtuell abbilden und dann im practical work abgleich
+9. Mit Joe real-life scenarios nachstellen
+
+10. diese dann virtuell abbilden und dann im practical work abgleich
   vermutung - starke unterschiede (virtuell womöglich viel ausfall)
 

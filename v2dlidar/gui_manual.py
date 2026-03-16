@@ -162,15 +162,16 @@ class ManualGUI(tk.Tk):
             layout_data = get_apartment_layout_data(self.spec) if self.spec else None
             if layout_data is not None:
                 rooms, doors = layout_data
-                door_width = 0.8
-                half_door = door_width / 2.0
                 for r in rooms:
                     rect = mpatches.Rectangle(
                         (r.x, r.y), r.width, r.height,
                         linewidth=3, edgecolor="#333333", facecolor="#f9f9f9"
                     )
                     self.ax.add_patch(rect)
-                for dx, dy, orientation, _ in doors:
+                # Doors are (dx, dy, orientation, width_used); use width_used so
+                # that visual gaps match the geometry that the planner uses.
+                for dx, dy, orientation, width_used in doors:
+                    half_door = width_used / 2.0
                     if orientation == "vertical":
                         self.ax.plot(
                             [dx, dx], [dy - half_door, dy + half_door],

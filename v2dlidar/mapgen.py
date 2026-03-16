@@ -595,6 +595,11 @@ def _resolve_apartment_rooms_and_doors(
                             continue
                         if any(_door_on_wall_between(d, r, other, tol) for d in doors):
                             continue  # already have a door to this neighbor
+                        clean_door = _apt_door_position_clean(r, other, rooms, min_door_floor)
+                        if clean_door is not None:
+                            doors.append(clean_door)
+                            added = True
+                            break
                         wall = _apt_find_shared_wall(r, other)
                         if wall is None:
                             continue
@@ -615,14 +620,18 @@ def _resolve_apartment_rooms_and_doors(
         )
         if n_comp == 1:
             return (rooms, doors, effective_min_door_width)
-        # Fallback: add midpoint door for any sibling pair that has no door
+        # Fallback: add door for any sibling pair that has no door (prefer clean segment to avoid T-junctions)
         for r1, r2 in sibling_pairs:
             if any(_door_on_wall_between(d, r1, r2, tol) for d in doors):
                 continue
-            fallback = _apt_find_shared_wall(r1, r2)
-            if fallback is not None:
-                dx, dy, orient = fallback
-                doors.append((dx, dy, orient, min_door_floor))
+            clean_door = _apt_door_position_clean(r1, r2, rooms, min_door_floor)
+            if clean_door is not None:
+                doors.append(clean_door)
+            else:
+                fallback = _apt_find_shared_wall(r1, r2)
+                if fallback is not None:
+                    dx, dy, orient = fallback
+                    doors.append((dx, dy, orient, min_door_floor))
         # Room-level: ensure every room has at least min(2, adj_count) connections
         while not all(_room_neighbor_count(r, rooms, doors, tol) >= _room_required_connections(r, rooms) for r in rooms):
             added = False
@@ -634,6 +643,11 @@ def _resolve_apartment_rooms_and_doors(
                         continue
                     if any(_door_on_wall_between(d, r, other, tol) for d in doors):
                         continue
+                    clean_door = _apt_door_position_clean(r, other, rooms, min_door_floor)
+                    if clean_door is not None:
+                        doors.append(clean_door)
+                        added = True
+                        break
                     wall = _apt_find_shared_wall(r, other)
                     if wall is None:
                         continue

@@ -83,43 +83,49 @@ def load_scan_path(
         return json.load(f)
 
 
-def plot_scenario(
+def draw_scenario_on_ax(
+    ax,
     scen_spec: ScenarioSpec,
+    segments,
     show_pose: Optional[Tuple[float, float, float]] = None,
     scan_path: Optional[Dict[str, object]] = None,
-    save_path: Optional[str] = None,
     title_extra: Optional[str] = None,
 ) -> None:
-    """Plot the scenario walls and optionally a LiDAR pose and ideal path.
-    If save_path is set, save the figure to that path. If title_extra is set, append it to the title."""
-    segments, spec, _, _ = generate_scenario(scen_spec)
-
-    fig, ax = plt.subplots(figsize=(6, 6))
-
-    # Plot walls: apartment layout uses rooms + doors; union uses segments
+    """Draw scenario walls (and optionally pose + ideal path) onto an existing Axes."""
     layout = getattr(scen_spec, "layout", "union")
     if layout == "apartment":
         layout_data = get_apartment_layout_data(scen_spec)
         if layout_data is not None:
             rooms, doors = layout_data
-            door_width = 0.8
-            half_door = door_width / 2.0
             for r in rooms:
                 rect = mpatches.Rectangle(
-                    (r.x, r.y), r.width, r.height,
-                    linewidth=3, edgecolor="#333333", facecolor="#f9f9f9"
+                    (r.x, r.y),
+                    r.width,
+                    r.height,
+                    linewidth=3,
+                    edgecolor="#333333",
+                    facecolor="#f9f9f9",
                 )
                 ax.add_patch(rect)
-            for dx, dy, orientation, _ in doors:
+            # Doors are (dx, dy, orientation, width_used); draw gaps using
+            # width_used so visual door openings match the planner geometry.
+            for dx, dy, orientation, width_used in doors:
+                half_door = width_used / 2.0
                 if orientation == "vertical":
                     ax.plot(
-                        [dx, dx], [dy - half_door, dy + half_door],
-                        color="white", linewidth=4, zorder=3
+                        [dx, dx],
+                        [dy - half_door, dy + half_door],
+                        color="white",
+                        linewidth=4,
+                        zorder=3,
                     )
                 else:
                     ax.plot(
-                        [dx - half_door, dx + half_door], [dy, dy],
-                        color="white", linewidth=4, zorder=3
+                        [dx - half_door, dx + half_door],
+                        [dy, dy],
+                        color="white",
+                        linewidth=4,
+                        zorder=3,
                     )
         else:
             for s in segments:
@@ -152,7 +158,7 @@ def plot_scenario(
         x, y, yaw = show_pose
         ax.plot(x, y, marker="o", color="red", markersize=6)
         # Draw a short heading arrow
-        arrow_len = min(spec.width, spec.height) * 0.05
+        arrow_len = min(scen_spec.width, scen_spec.height) * 0.05
         ax.arrow(
             x,
             y,
@@ -163,8 +169,8 @@ def plot_scenario(
             color="red",
         )
 
-    ax.set_xlim(0, spec.width)
-    ax.set_ylim(0, spec.height)
+    ax.set_xlim(0, scen_spec.width)
+    ax.set_ylim(0, scen_spec.height)
     ax.set_aspect("equal", adjustable="box")
     title = "Scenario visualization"
     if title_extra:
@@ -175,6 +181,28 @@ def plot_scenario(
     ax.invert_yaxis()  # match the GUI convention
     if scan_path is not None:
         ax.legend(loc="best")
+
+
+def plot_scenario(
+    scen_spec: ScenarioSpec,
+    show_pose: Optional[Tuple[float, float, float]] = None,
+    scan_path: Optional[Dict[str, object]] = None,
+    save_path: Optional[str] = None,
+    title_extra: Optional[str] = None,
+) -> None:
+    """Plot the scenario walls and optionally a LiDAR pose and ideal path.
+    If save_path is set, save the figure to that path. If title_extra is set, append it to the title."""
+    segments, _, _, _ = generate_scenario(scen_spec)
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    draw_scenario_on_ax(
+        ax,
+        scen_spec,
+        segments,
+        show_pose=show_pose,
+        scan_path=scan_path,
+        title_extra=title_extra,
+    )
     plt.tight_layout()
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches="tight")

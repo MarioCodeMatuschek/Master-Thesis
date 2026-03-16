@@ -25,14 +25,14 @@ from .visualize_scenario import plot_scenario
 
 
 def main() -> None:
-    # Random seed for a random scenario (same defaults as GUI: 30x30, apartment, 4 iterations)
+    # Random seed for a random scenario (30x30, apartment; 5 iterations => ~32 rooms for complex validation)
     seed = random.randint(0, 99999)
     spec = ScenarioSpec(
         width=30.0,
         height=30.0,
         layout="apartment",
         seed=seed,
-        apt_iterations=4,
+        apt_iterations=5,
     )
     segments, scen_spec, interior, res = generate_scenario(spec)
     n_comp, _ = free_space_connected_components(

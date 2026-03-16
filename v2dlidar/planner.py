@@ -76,6 +76,9 @@ def astar_path(occ: np.ndarray, start_xy: Tuple[float,float], goal_xy: Tuple[flo
     if occ[start[1], start[0]] or occ[goal[1], goal[0]]:
         return None
     import heapq, math
+    # 8-connected neighborhood; diagonals are allowed but we will explicitly
+    # forbid "corner cutting" where a diagonal move would squeeze between two
+    # occupied cells that touch at a corner.
     nbrs8 = [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]
     g = {start:0.0}
     came = {}
@@ -92,8 +95,17 @@ def astar_path(occ: np.ndarray, start_xy: Tuple[float,float], goal_xy: Tuple[flo
             return [to_world(p) for p in path]
         for dx,dy in nbrs8:
             nx, ny = cur[0]+dx, cur[1]+dy
-            if nx<0 or ny<0 or nx>=W or ny>=H: continue
-            if occ[ny,nx]: continue
+            if nx<0 or ny<0 or nx>=W or ny>=H:
+                continue
+            # Disallow diagonal moves that would cut a corner between two
+            # occupied cells. For a move from (x,y) -> (x+dx,y+dy) with
+            # dx!=0 and dy!=0, at least one of the intermediate orthogonal
+            # neighbors (x+dx, y) or (x, y+dy) must be free.
+            if dx != 0 and dy != 0:
+                if occ[cur[1], cur[0] + dx] or occ[cur[1] + dy, cur[0]]:
+                    continue
+            if occ[ny,nx]:
+                continue
             ng = g[cur] + ((dx*dx+dy*dy)**0.5)
             if (nx,ny) not in g or ng < g[(nx,ny)]:
                 g[(nx,ny)] = ng

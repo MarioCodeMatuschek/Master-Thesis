@@ -59,10 +59,18 @@ class DatasetGenerator:
         # Navigation occupancy: 1 = forbidden (wall or outside union), 0 = free (inside union, off walls)
         occ = occ_walls.copy()
         occ[interior == 0] = 1
-        lidar = LidarSimulator(self.lidar_spec, segments)
+        # Randomize LiDAR noise parameters per scenario in a reproducible way
+        lidar_spec = LidarSpec(
+            fov_deg=self.lidar_spec.fov_deg,
+            num_rays=self.lidar_spec.num_rays,
+            max_range=self.lidar_spec.max_range,
+            range_noise_std=rng.uniform(0.005, 0.05),
+            dropout_prob=rng.uniform(0.01, 0.2),
+        )
+        lidar = LidarSimulator(lidar_spec, segments)
         scen_dir = os.path.join(self.out_dir, f"scenario_{scenario_id:04d}")
         ensure_dir(scen_dir)
-        write_json(os.path.join(scen_dir, "scenario_meta.json"), {"spec": vars(spec), "lidar": vars(self.lidar_spec)})
+        write_json(os.path.join(scen_dir, "scenario_meta.json"), {"spec": vars(spec), "lidar": vars(lidar_spec)})
 
         # Single-scan dataset
         scans_header = [
@@ -86,20 +94,33 @@ class DatasetGenerator:
 
         def scan_rows():
             scan_id = 0
+            # For each randomly chosen pose, we sample one goal and one path and
+            # reuse them across all headings_per_pose. Only the yaw (and thus
+            # the LiDAR scan) changes between headings at the same pose.
             for _ in range(self.cfg.scans_per_scenario):
                 pose = self._random_free_pose(occ, res, rng)
+                x, y, _ = pose
+                start_xy = (x, y)
+                # Sample a goal and ensure there is a valid path; retry a number
+                # of times so we are likely to get at least one scan for this pose.
+                goal = None
+                path = None
+                max_goal_tries = 50
+                for _ in range(max_goal_tries):
+                    candidate_goal = self._sample_goal_far(occ, res, start_xy, rng)
+                    candidate_path = astar_path(occ, start_xy, candidate_goal, res)
+                    if candidate_path is not None and len(candidate_path) >= 2:
+                        goal = candidate_goal
+                        path = candidate_path
+                        break
+                if goal is None or path is None:
+                    # Could not find a valid path for this pose; skip it.
+                    continue
+                # Save ideal geometric path for this pose/goal pair once; it will
+                # be reused across all headings at this pose.
+                path_points = [{"x": float(px), "y": float(py)} for (px, py) in path]
                 for _ in range(self.cfg.headings_per_pose):
-                    x, y, _ = pose
                     yaw = rng.uniform(-math.pi, math.pi)
-                    start_xy = (x, y)
-                    # Sample a goal and ensure there is a valid path
-                    goal = self._sample_goal_far(occ, res, start_xy, rng)
-                    path = astar_path(occ, start_xy, goal, res)
-                    if path is None or len(path) < 2:
-                        # If no path, skip this scan
-                        continue
-                    # Save ideal geometric path for this scan
-                    path_points = [{"x": float(px), "y": float(py)} for (px, py) in path]
                     write_json(
                         os.path.join(scan_paths_dir, f"scan_{scan_id:04d}.json"),
                         {
@@ -191,12 +212,25 @@ class DatasetGenerator:
         spec_kwargs["seed"] = self.scen_spec.seed + scenario_id
         # Force a deterministic scenario using scenario_id-based seed
         segments, spec, interior, res = generate_scenario(ScenarioSpec(**spec_kwargs))
-        # Ensure LiDAR has 360° and 720 rays (0.5° resolution); if not, temporarily override
+        # Ensure LiDAR has 360° and 720 rays (0.5° resolution) and randomize noise per scenario
         from .lidar import LidarSpec, LidarSimulator
-        lidar_spec = self.lidar_spec
-        if abs(lidar_spec.fov_deg - 360.0) > 1e-6 or lidar_spec.num_rays != 720:
-            lidar_spec = LidarSpec(fov_deg=360.0, num_rays=720, max_range=self.lidar_spec.max_range,
-                                   range_noise_std=self.lidar_spec.range_noise_std, dropout_prob=self.lidar_spec.dropout_prob)
+        base_spec = self.lidar_spec
+        if abs(base_spec.fov_deg - 360.0) > 1e-6 or base_spec.num_rays != 720:
+            base_spec = LidarSpec(
+                fov_deg=360.0,
+                num_rays=720,
+                max_range=self.lidar_spec.max_range,
+                range_noise_std=self.lidar_spec.range_noise_std,
+                dropout_prob=self.lidar_spec.dropout_prob,
+            )
+        rng = random.Random(self.cfg.seed + scenario_id)
+        lidar_spec = LidarSpec(
+            fov_deg=base_spec.fov_deg,
+            num_rays=base_spec.num_rays,
+            max_range=base_spec.max_range,
+            range_noise_std=rng.uniform(0.005, 0.05),
+            dropout_prob=rng.uniform(0.01, 0.2),
+        )
         # Build interior-aware occupancy to validate start/goal
         occ_walls, _ = occupancy_from_segments(segments, spec.width, spec.height, res)
         occ = occ_walls.copy()
@@ -284,8 +318,16 @@ class DatasetGenerator:
                     pass
             if nums:
                 next_idx = max(nums) + 1
-        # Build lidar and records
-        lidar = LidarSimulator(self.lidar_spec, segments)
+        # Build lidar and records with per-scenario randomized noise (deterministic from cfg.seed and scenario_id)
+        rng = random.Random(self.cfg.seed + scenario_id)
+        lidar_spec = LidarSpec(
+            fov_deg=self.lidar_spec.fov_deg,
+            num_rays=self.lidar_spec.num_rays,
+            max_range=self.lidar_spec.max_range,
+            range_noise_std=rng.uniform(0.005, 0.05),
+            dropout_prob=rng.uniform(0.01, 0.2),
+        )
+        lidar = LidarSimulator(lidar_spec, segments)
         steps = []
         start_yaw = 0.0
         for step, (x,y) in enumerate(path_seq):

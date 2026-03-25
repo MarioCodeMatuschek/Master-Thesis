@@ -21,7 +21,7 @@ class ScenarioSpec:
     apt_door_prob: float = 0.8  # chance of doorway between adjacent rooms
     apt_min_door_width: float = 0.6  # min door gap (m); should exceed 2× occupancy wall thickness (~0.15 m) so doors stay traversable after inflation
     apt_verify_connectivity: bool = True  # if True, ensure every room has >=2 connections and free space is one connected component
-    apt_iterations: int = 4  # BSP split iterations for apartment layout (number of recursive splits)
+    apt_iterations: int = 2  # BSP split iterations for apartment layout (number of recursive splits)
 
 def _rect_edges(cx, cy, w, h, yaw):
     c = math.cos(yaw); s = math.sin(yaw)
@@ -466,11 +466,72 @@ def _apartment_segments_from_doors(
     doors: List[Tuple[float, float, str, float]],
     width: float,
     height: float,
+    exterior_doors: Optional[List[Tuple[float, float, str, float]]] = None,
 ) -> List[Segment]:
-    """Build wall segments from rooms and door list; outer boundary plus wall segments with gaps at each door. Each door is (dx, dy, orientation, width_used)."""
+    """
+    Build wall segments from rooms and door list.
+
+    Outer boundary is included, with optional doorway gaps carved on the *outer* boundary via `exterior_doors`.
+    Interior walls are represented by wall segments with gaps at each *interior* door.
+
+    Door tuple format: (dx, dy, orientation, width_used)
+      - orientation == "vertical": wall at x == dx, doorway centered at y == dy
+      - orientation == "horizontal": wall at y == dy, doorway centered at x == dx
+    """
     eps = 1e-6
     segments: List[Segment] = []
-    segments += _rect_edges(width / 2.0, height / 2.0, width, height, 0.0)
+    exterior_doors = exterior_doors or []
+
+    def _subtract_gap(intervals: List[Tuple[float, float]], gap_lo: float, gap_hi: float) -> List[Tuple[float, float]]:
+        """Remove open interval (gap_lo, gap_hi) from a list of closed intervals."""
+        if gap_hi <= gap_lo:
+            return intervals
+        out: List[Tuple[float, float]] = []
+        for a, b in intervals:
+            # No overlap.
+            if gap_hi <= a + eps or gap_lo >= b - eps:
+                out.append((a, b))
+                continue
+            # Overlap: keep left part and right part if they remain positive length.
+            if a < gap_lo - eps:
+                out.append((a, gap_lo))
+            if gap_hi + eps < b:
+                out.append((gap_hi, b))
+        return out
+
+    # Build outer boundary edges, then carve exterior doorway gaps by subtracting y/x intervals.
+    left_intervals = [(0.0, height)]
+    right_intervals = [(0.0, height)]
+    bottom_intervals = [(0.0, width)]
+    top_intervals = [(0.0, width)]
+
+    for door in exterior_doors:
+        dx, dy, orientation, width_used = door
+        half_gap = width_used / 2.0
+        if orientation == "vertical":
+            if abs(dx - 0.0) < 1e-6:
+                left_intervals = _subtract_gap(left_intervals, dy - half_gap, dy + half_gap)
+            elif abs(dx - width) < 1e-6:
+                right_intervals = _subtract_gap(right_intervals, dy - half_gap, dy + half_gap)
+        else:
+            if abs(dy - 0.0) < 1e-6:
+                bottom_intervals = _subtract_gap(bottom_intervals, dx - half_gap, dx + half_gap)
+            elif abs(dy - height) < 1e-6:
+                top_intervals = _subtract_gap(top_intervals, dx - half_gap, dx + half_gap)
+
+    for y1, y2 in left_intervals:
+        if y2 > y1 + eps:
+            segments.append(Segment(0.0, y1, 0.0, y2))
+    for y1, y2 in right_intervals:
+        if y2 > y1 + eps:
+            segments.append(Segment(width, y1, width, y2))
+    for x1, x2 in bottom_intervals:
+        if x2 > x1 + eps:
+            segments.append(Segment(x1, 0.0, x2, 0.0))
+    for x1, x2 in top_intervals:
+        if x2 > x1 + eps:
+            segments.append(Segment(x1, height, x2, height))
+
     for door in doors:
         dx, dy, orientation, width_used = door
         half_gap = width_used / 2.0
@@ -487,6 +548,161 @@ def _apartment_segments_from_doors(
             if dx + half_gap + eps < x_max:
                 segments.append(Segment(dx + half_gap, dy, x_max, dy))
     return segments
+
+
+def _snap_to_planner_grid(val: float, res: float) -> float:
+    """Snap a coordinate to an exact multiple of `res` for A* endpoint equality."""
+    if res <= 0:
+        return val
+    return round(val / res) * res
+
+
+def _is_planner_grid_value(val: float, res: float, tol: float = 1e-6) -> bool:
+    if res <= 0:
+        return False
+    return abs(val / res - round(val / res)) < tol
+
+
+def _sample_exterior_apartment_exit_goal(
+    rooms: List[_AptRoom],
+    doors: List[Tuple[float, float, str, float]],
+    width: float,
+    height: float,
+    effective_min_door_width: float,
+    rng: random.Random,
+    res: float,
+    interior: np.ndarray,
+) -> Tuple[Optional[Tuple[float, float, str, float]], Optional[Tuple[float, float]]]:
+    """
+    Sample a deterministic exterior door on the outer boundary, then carve its gap and validate that:
+      - the goal cell is free in the inflated occupancy grid, and
+      - free space remains a single connected component (so A* won't fail for random free starts).
+
+    Returns:
+      (exterior_door, exterior_goal)
+    """
+    min_door_floor = _APT_MIN_DOOR_FLOOR
+    tol_wall = 0.1
+    exterior_thickness = 0.3  # only used for shared-wall membership checks
+
+    outside_left = _AptRoom(-exterior_thickness, 0.0, exterior_thickness, height)
+    outside_right = _AptRoom(width, 0.0, exterior_thickness, height)
+    outside_bottom = _AptRoom(0.0, -exterior_thickness, width, exterior_thickness)
+    outside_top = _AptRoom(0.0, height, width, exterior_thickness)
+
+    candidates: List[Tuple[float, float, str, float]] = []
+
+    def _add_candidates_from_side(side_rooms: List[_AptRoom], outside_room: _AptRoom, orientation: str):
+        all_rooms_with_outside = rooms + [outside_room]
+        for r in side_rooms:
+            # Clean door preferred (avoids T-junction placements); fallback uses midpoint even if clean fails.
+            clean = _apt_door_position_clean(
+                r,
+                outside_room,
+                all_rooms_with_outside,
+                effective_min_door_width,
+            )
+            if clean is not None:
+                candidates.append(clean)
+            else:
+                wall = _apt_find_shared_wall(r, outside_room)
+                if wall is not None:
+                    dx, dy, orient = wall
+                    candidates.append((dx, dy, orient, min_door_floor))
+
+    left_rooms = [r for r in rooms if abs(r.x - 0.0) < tol_wall]
+    right_rooms = [r for r in rooms if abs((r.x + r.width) - width) < tol_wall]
+    bottom_rooms = [r for r in rooms if abs(r.y - 0.0) < tol_wall]
+    top_rooms = [r for r in rooms if abs((r.y + r.height) - height) < tol_wall]
+
+    _add_candidates_from_side(left_rooms, outside_left, "vertical")
+    _add_candidates_from_side(right_rooms, outside_right, "vertical")
+    _add_candidates_from_side(bottom_rooms, outside_bottom, "horizontal")
+    _add_candidates_from_side(top_rooms, outside_top, "horizontal")
+
+    if not candidates:
+        # Extremely unlikely: fall back to picking any boundary room midpoint using shared-wall overlap.
+        if left_rooms:
+            outside_room = outside_left
+            r = left_rooms[0]
+            wall = _apt_find_shared_wall(r, outside_room)
+            if wall is not None:
+                dx, dy, orient = wall
+                candidates = [(dx, dy, orient, min_door_floor)]
+        elif bottom_rooms:
+            outside_room = outside_bottom
+            r = bottom_rooms[0]
+            wall = _apt_find_shared_wall(r, outside_room)
+            if wall is not None:
+                dx, dy, orient = wall
+                candidates = [(dx, dy, orient, min_door_floor)]
+
+    # Validate candidates in deterministic RNG order; first valid one becomes the exterior exit.
+    rng.shuffle(candidates)
+
+    from .planner import occupancy_from_segments, free_space_connected_components
+
+    W = int(np.ceil(width / res))
+    H = int(np.ceil(height / res))
+
+    for cand in candidates:
+        dx, dy, orientation, width_used = cand
+        half_gap = width_used / 2.0
+
+        # Endpoint constraint: snap along the wall-facing axis, and require the wall coordinate to already be grid-aligned.
+        snapped_dx = dx
+        snapped_dy = dy
+        if orientation == "vertical":
+            if not _is_planner_grid_value(dx, res):
+                continue
+            snapped_dy = _snap_to_planner_grid(dy, res)
+            snapped_goal = (snapped_dx, snapped_dy)
+        else:
+            if not _is_planner_grid_value(dy, res):
+                continue
+            snapped_dx = _snap_to_planner_grid(dx, res)
+            snapped_goal = (snapped_dx, snapped_dy)
+
+        # Ensure the gap is fully within the outer boundary segment extents.
+        if snapped_goal[1] - half_gap <= 0.0 + 1e-9 or snapped_goal[1] + half_gap >= height - 1e-9:
+            if orientation == "vertical":
+                continue
+        if snapped_goal[0] - half_gap <= 0.0 + 1e-9 or snapped_goal[0] + half_gap >= width - 1e-9:
+            if orientation == "horizontal":
+                continue
+
+        snapped_cand_door = (snapped_dx, snapped_dy, orientation, width_used)
+        segments = _apartment_segments_from_doors(
+            rooms, doors, width, height, exterior_doors=[snapped_cand_door]
+        )
+
+        occ_walls, _ = occupancy_from_segments(segments, width, height, res)
+        gx = int(np.clip(snapped_goal[0] / res, 0, W - 1))
+        gy = int(np.clip(snapped_goal[1] / res, 0, H - 1))
+        if occ_walls[gy, gx] != 0:
+            continue
+
+        n_comp, _ = free_space_connected_components(
+            segments, width, height, res, interior=interior
+        )
+        if n_comp != 1:
+            continue
+
+        return snapped_cand_door, snapped_goal
+
+    # If all candidates fail validation, fall back to the first candidate (keeps generation from crashing).
+    if candidates:
+        dx, dy, orientation, width_used = candidates[0]
+        if orientation == "vertical":
+            snapped_dy = _snap_to_planner_grid(dy, res)
+            snapped_goal = (dx, snapped_dy)
+            return (dx, snapped_dy, orientation, width_used), snapped_goal
+        else:
+            snapped_dx = _snap_to_planner_grid(dx, res)
+            snapped_goal = (snapped_dx, dy)
+            return (snapped_dx, dy, orientation, width_used), snapped_goal
+
+    return None, None
 
 
 def _door_on_wall_between(door: Tuple[float, float, str, float], r1: _AptRoom, r2: _AptRoom, tol: float = 0.1) -> bool:
@@ -566,7 +782,7 @@ def _resolve_apartment_rooms_and_doors(
     """
     width = spec.width
     height = spec.height
-    iterations = max(1, getattr(spec, "apt_iterations", 4))
+    iterations = max(1, getattr(spec, "apt_iterations", 2))
     effective_min_door_width = float(getattr(spec, "apt_min_door_width", 0.6))
     verify = getattr(spec, "apt_verify_connectivity", True)
     res = max(1e-3, float(spec.outline_res))
@@ -684,13 +900,31 @@ def _generate_apartment_scenario(spec: ScenarioSpec):
 
     Returns (segments, spec, interior, res) with the same structure as _generate_union_scenario.
     """
-    rooms, doors, _ = _resolve_apartment_rooms_and_doors(spec)
+    rooms, doors, effective_min_door_width = _resolve_apartment_rooms_and_doors(spec)
     res = max(1e-3, float(spec.outline_res))
     W = int(math.ceil(spec.width / res))
     H = int(math.ceil(spec.height / res))
     interior = np.ones((H, W), dtype=np.uint8)
 
-    segments = _apartment_segments_from_doors(rooms, doors, spec.width, spec.height)
+    rng = random.Random(spec.seed)
+    exterior_door, exterior_goal = _sample_exterior_apartment_exit_goal(
+        rooms=rooms,
+        doors=doors,
+        width=spec.width,
+        height=spec.height,
+        effective_min_door_width=effective_min_door_width,
+        rng=rng,
+        res=res,
+        interior=interior,
+    )
+
+    segments = _apartment_segments_from_doors(
+        rooms,
+        doors,
+        spec.width,
+        spec.height,
+        exterior_doors=[exterior_door] if exterior_door is not None else None,
+    )
 
     if getattr(spec, "apt_verify_connectivity", True):
         from .planner import free_space_connected_components
@@ -703,7 +937,7 @@ def _generate_apartment_scenario(spec: ScenarioSpec):
                 f"Apartment scenario free space has {n_comp} connected components (expected 1). Layout may have enclosed rooms."
             )
 
-    return segments, spec, interior, res
+    return segments, spec, interior, res, exterior_goal
 
 
 def generate_scenario(spec: ScenarioSpec):
@@ -718,4 +952,5 @@ def generate_scenario(spec: ScenarioSpec):
     if layout == "apartment":
         return _generate_apartment_scenario(spec)
     else:
-        return _generate_union_scenario(spec)
+        segments, spec, interior, res = _generate_union_scenario(spec)
+        return segments, spec, interior, res, None

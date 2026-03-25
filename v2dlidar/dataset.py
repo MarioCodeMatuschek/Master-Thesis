@@ -53,7 +53,7 @@ class DatasetGenerator:
         spec_kwargs = vars(self.scen_spec).copy()
         spec_kwargs["seed"] = self.scen_spec.seed + scenario_id
         # Generate geometry and interior mask (union of rectangles)
-        segments, spec, interior, res = generate_scenario(ScenarioSpec(**spec_kwargs))
+        segments, spec, interior, res, exterior_goal = generate_scenario(ScenarioSpec(**spec_kwargs))
         # Occupancy from walls only
         occ_walls, _ = occupancy_from_segments(segments, spec.width, spec.height, res)
         # Navigation occupancy: 1 = forbidden (wall or outside union), 0 = free (inside union, off walls)
@@ -101,21 +101,27 @@ class DatasetGenerator:
                 pose = self._random_free_pose(occ, res, rng)
                 x, y, _ = pose
                 start_xy = (x, y)
-                # Sample a goal and ensure there is a valid path; retry a number
-                # of times so we are likely to get at least one scan for this pose.
-                goal = None
-                path = None
-                max_goal_tries = 50
-                for _ in range(max_goal_tries):
-                    candidate_goal = self._sample_goal_far(occ, res, start_xy, rng)
-                    candidate_path = astar_path(occ, start_xy, candidate_goal, res)
-                    if candidate_path is not None and len(candidate_path) >= 2:
-                        goal = candidate_goal
-                        path = candidate_path
-                        break
-                if goal is None or path is None:
-                    # Could not find a valid path for this pose; skip it.
-                    continue
+                if spec.layout == "apartment" and exterior_goal is not None:
+                    # Apartment: goal is a fixed exterior doorway center per scenario.
+                    goal = exterior_goal
+                    path = astar_path(occ, start_xy, goal, res)
+                    if path is None or len(path) < 2:
+                        continue
+                else:
+                    # Union: sample a goal and ensure there is a valid path; retry a
+                    # number of times so we are likely to get at least one scan for this pose.
+                    goal = None
+                    path = None
+                    max_goal_tries = 50
+                    for _ in range(max_goal_tries):
+                        candidate_goal = self._sample_goal_far(occ, res, start_xy, rng)
+                        candidate_path = astar_path(occ, start_xy, candidate_goal, res)
+                        if candidate_path is not None and len(candidate_path) >= 2:
+                            goal = candidate_goal
+                            path = candidate_path
+                            break
+                    if goal is None or path is None:
+                        continue
                 # Save ideal geometric path for this pose/goal pair once; it will
                 # be reused across all headings at this pose.
                 path_points = [{"x": float(px), "y": float(py)} for (px, py) in path]
@@ -132,8 +138,16 @@ class DatasetGenerator:
                         },
                     )
                     # Run LiDAR scans for this pose/yaw
-                    s = lidar.scan((x, y, yaw), rng=rng, noise_free=False)
-                    s_nf = lidar.scan((x, y, yaw), rng=rng, noise_free=True)
+                    target_xy = goal if spec.layout == "apartment" else None
+                    s = lidar.scan(
+                        (x, y, yaw), rng=rng, noise_free=False, target_xy=target_xy
+                    )
+                    s_nf = lidar.scan(
+                        (x, y, yaw),
+                        rng=rng,
+                        noise_free=True,
+                        target_xy=target_xy,
+                    )
                     for i in range(len(s["theta_deg"])):
                         hit_x = s["hits"][i,0]; hit_y = s["hits"][i,1]
                         valid = int(np.isfinite(hit_x))
@@ -164,7 +178,10 @@ class DatasetGenerator:
                 start = manual_start; goal = manual_goal
             else:
                 s_pose = self._random_free_pose(occ, res, rng); start = (s_pose[0], s_pose[1])
-                goal = self._sample_goal_far(occ, res, start, rng)
+                if spec.layout == "apartment" and exterior_goal is not None:
+                    goal = exterior_goal
+                else:
+                    goal = self._sample_goal_far(occ, res, start, rng)
             path = astar_path(occ, start, goal, res)
             if path is None or len(path) < 2:
                 continue
@@ -179,7 +196,8 @@ class DatasetGenerator:
                     yaw = math.atan2(ny-y, nx-x)
                 else:
                     yaw = 0.0
-                s = lidar.scan((x,y,yaw), rng=rng, noise_free=False)
+                target_xy = goal if spec.layout == "apartment" else None
+                s = lidar.scan((x, y, yaw), rng=rng, noise_free=False, target_xy=target_xy)
                 rec = {
                     "step": int(step),
                     "pose_x": float(x), "pose_y": float(y), "pose_yaw": float(yaw),
@@ -211,7 +229,7 @@ class DatasetGenerator:
         spec_kwargs = vars(self.scen_spec).copy()
         spec_kwargs["seed"] = self.scen_spec.seed + scenario_id
         # Force a deterministic scenario using scenario_id-based seed
-        segments, spec, interior, res = generate_scenario(ScenarioSpec(**spec_kwargs))
+        segments, spec, interior, res, _ = generate_scenario(ScenarioSpec(**spec_kwargs))
         # Ensure LiDAR has 360° and 720 rays (0.5° resolution) and randomize noise per scenario
         from .lidar import LidarSpec, LidarSimulator
         base_spec = self.lidar_spec
@@ -246,7 +264,8 @@ class DatasetGenerator:
             raise ValueError("Start and goal must lie inside the interior of the scenario and not on walls.")
         lidar = LidarSimulator(lidar_spec, segments)
         # Run one scan from the provided start pose
-        s = lidar.scan((sx, sy, syaw), noise_free=False)
+        target_xy = goal if spec.layout == "apartment" else None
+        s = lidar.scan((sx, sy, syaw), noise_free=False, target_xy=target_xy)
         out_dir = os.path.join(self.out_dir, f"scenario_{scenario_id:04d}")
         from .utils import ensure_dir, write_scan_long_csv, write_json
         ensure_dir(out_dir)
@@ -283,7 +302,7 @@ class DatasetGenerator:
         # Recreate deterministic scenario and planner with interior-aware occupancy
         spec_kwargs = vars(self.scen_spec).copy()
         spec_kwargs["seed"] = self.scen_spec.seed + scenario_id
-        segments, spec, interior, res = generate_scenario(ScenarioSpec(**spec_kwargs))
+        segments, spec, interior, res, _ = generate_scenario(ScenarioSpec(**spec_kwargs))
         occ_walls, _ = occupancy_from_segments(segments, spec.width, spec.height, res)
         occ = occ_walls.copy()
         occ[interior == 0] = 1

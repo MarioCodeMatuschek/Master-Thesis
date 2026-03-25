@@ -167,20 +167,39 @@ def draw_lidar_rays_on_ax(
             alpha=0.5,
         )
 
-    # For invalid / dropout rays, draw to max_range in that direction
+    # For invalid / dropout rays, draw according to the stored measured range `r_m`.
     invalid = ~valid
     if np.any(invalid):
         th_inv = theta_rad[invalid]
-        x_end = x0 + lidar_spec.max_range * np.cos(th_inv)
-        y_end = y0 + lidar_spec.max_range * np.sin(th_inv)
-        for xe, ye in zip(x_end, y_end):
-            ax.plot(
-                [x0, xe],
-                [y0, ye],
-                color="red",
-                linewidth=0.4,
-                alpha=0.3,
+        r_invalid = r_m[invalid]
+
+        # Avoid zero-length lines; instead show a small marker at the sensor origin.
+        zero_mask = np.abs(r_invalid) < 1e-6
+        if np.any(zero_mask):
+            ax.scatter(
+                np.full(np.count_nonzero(zero_mask), x0, dtype=float),
+                np.full(np.count_nonzero(zero_mask), y0, dtype=float),
+                c="red",
+                marker="x",
+                s=25,
+                alpha=0.8,
+                linewidths=1.0,
             )
+
+        nonzero_mask = ~zero_mask
+        if np.any(nonzero_mask):
+            th_nz = th_inv[nonzero_mask]
+            r_nz = r_invalid[nonzero_mask]
+            x_end = x0 + r_nz * np.cos(th_nz)
+            y_end = y0 + r_nz * np.sin(th_nz)
+            for xe, ye in zip(x_end, y_end):
+                ax.plot(
+                    [x0, xe],
+                    [y0, ye],
+                    color="red",
+                    linewidth=0.4,
+                    alpha=0.3,
+                )
 
     # Optionally show ideal (noise-free) hit locations as small gray dots
     if show_ideal_hits:
@@ -247,7 +266,7 @@ def draw_polar_lidar(
     if np.any(invalid):
         ax.scatter(
             theta_rel[invalid],
-            np.full(np.count_nonzero(invalid), lidar_spec.max_range, dtype=np.float32),
+            r_m[invalid],
             s=8,
             c="red",
             marker="x",
@@ -327,7 +346,7 @@ def main() -> None:
     lidar_spec = load_lidar_spec(scenario_dir)
 
     # Rebuild scenario geometry
-    segments, _, _, _ = generate_scenario(scen_spec)
+    segments, _, _, _, _ = generate_scenario(scen_spec)
 
     # Load scan data
     rng = np.random.default_rng(args.seed) if args.seed is not None else None

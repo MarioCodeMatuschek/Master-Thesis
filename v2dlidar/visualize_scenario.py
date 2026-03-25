@@ -192,7 +192,7 @@ def plot_scenario(
 ) -> None:
     """Plot the scenario walls and optionally a LiDAR pose and ideal path.
     If save_path is set, save the figure to that path. If title_extra is set, append it to the title."""
-    segments, _, _, _ = generate_scenario(scen_spec)
+    segments, _, _, _, _ = generate_scenario(scen_spec)
 
     fig, ax = plt.subplots(figsize=(6, 6))
     draw_scenario_on_ax(

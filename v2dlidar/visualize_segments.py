@@ -143,7 +143,7 @@ def main() -> None:
 
     # Load spec and generate segments
     scen_spec = load_scenario_spec(scenario_dir)
-    segments, _, _, _ = generate_scenario(scen_spec)
+    segments, _, _, _, _ = generate_scenario(scen_spec)
 
     if args.side_by_side and not args.segments_only:
         fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(12, 6))

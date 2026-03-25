@@ -16,7 +16,7 @@ def main():
         choices=["union", "apartment"],
         help="Scenario layout: union (overlapping rectangles) or apartment (BSP floorplan). Default: union.",
     )
-    common.add_argument("--apt_iterations", type=int, default=3, help="BSP split iterations for apartment layout (number of rooms). Default: 3.")
+    common.add_argument("--apt_iterations", type=int, default=2, help="BSP split iterations for apartment layout (number of rooms). Default: 2.")
     common.add_argument("--apt_rows", type=int, default=2)
     common.add_argument("--apt_cols", type=int, default=3)
     common.add_argument("--apt_door_prob", type=float, default=0.8)
@@ -66,7 +66,7 @@ def main():
         apt_rows=args.apt_rows,
         apt_cols=args.apt_cols,
         apt_door_prob=args.apt_door_prob,
-        apt_iterations=getattr(args, "apt_iterations", 3),
+        apt_iterations=getattr(args, "apt_iterations", 2),
     )
     lidar = LidarSpec(fov_deg=args.fov_deg, num_rays=args.num_rays, max_range=args.max_range, range_noise_std=args.noise_std, dropout_prob=args.dropout)
     cfg = AutoGenConfig(

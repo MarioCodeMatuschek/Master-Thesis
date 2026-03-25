@@ -34,7 +34,7 @@ def main() -> None:
         seed=seed,
         apt_iterations=5,
     )
-    segments, scen_spec, interior, res = generate_scenario(spec)
+    segments, scen_spec, interior, res, _ = generate_scenario(spec)
     n_comp, _ = free_space_connected_components(
         segments, scen_spec.width, scen_spec.height, res, interior=interior
     )

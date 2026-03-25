@@ -58,7 +58,7 @@ class ManualGUI(tk.Tk):
         apt_frame = ttk.LabelFrame(params, text="Apartment Layout Scenarios", padding=4)
         apt_frame.pack(fill="x", pady=(0, 6))
         ttk.Label(apt_frame, text="Apartment iterations").pack(anchor="w")
-        self.apt_iterations_var = tk.IntVar(value=4)
+        self.apt_iterations_var = tk.IntVar(value=2)
         ttk.Spinbox(
             apt_frame, textvariable=self.apt_iterations_var, from_=1, to=8, width=10
         ).pack(anchor="w")
@@ -125,16 +125,28 @@ class ManualGUI(tk.Tk):
             apt_iterations=self.apt_iterations_var.get(),
         )
         # Geometry + interior mask (union of rectangles)
-        self.segments, self.spec, self.interior, self.grid_res = generate_scenario(spec)
+        (
+            self.segments,
+            self.spec,
+            self.interior,
+            self.grid_res,
+            exterior_goal,
+        ) = generate_scenario(spec)
         # Navigation occupancy: walls and outside-union are forbidden
         occ_walls, _ = occupancy_from_segments(
             self.segments, spec.width, spec.height, res=self.grid_res
         )
         self.occ = occ_walls.copy()
         self.occ[self.interior == 0] = 1
-        # Recompute preview path if both points are available
-        if self.start and self.goal:
-            self.compute_preview_path()
+        # For apartment: auto-select the goal at the exterior doorway each refresh.
+        # Start is always re-picked by the user.
+        layout = getattr(self.spec, "layout", "union")
+        if layout == "apartment" and exterior_goal is not None:
+            self.goal = exterior_goal
+        else:
+            self.goal = None
+        self.start = None
+        self.preview_path = None
         self.draw_scene()
         # Complexity: wall density from occupancy + segment count
         occ, res = occupancy_from_segments(
@@ -147,10 +159,10 @@ class ManualGUI(tk.Tk):
             f"Size: {spec.width:.1f} x {spec.height:.1f}"
         )
         self.comp_text.set(comp)
-        self.start = None
-        self.goal = None
-        self.preview_path = None
-        self.status.set("Pick Start (left click), Goal (right-click or Control+click)")
+        if layout == "apartment":
+            self.status.set("Pick Start (left click). Goal is set automatically (exterior doorway).")
+        else:
+            self.status.set("Pick Start (left click), Goal (right-click or Control+click)")
 
     def draw_scene(self):
         self.ax.clear()
@@ -260,7 +272,7 @@ class ManualGUI(tk.Tk):
             n_rects=self.spec.n_rects,
             seed=self.spec.seed,
             layout=self.spec.layout,
-            apt_iterations=getattr(self.spec, "apt_iterations", 4),
+            apt_iterations=getattr(self.spec, "apt_iterations", 2),
         )
         lidar = LidarSpec()  # defaults
         cfg = AutoGenConfig(

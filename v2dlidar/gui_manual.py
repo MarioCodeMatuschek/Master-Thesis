@@ -111,7 +111,9 @@ class ManualGUI(tk.Tk):
         self.occ = None
         self.grid_res = 0.1
         self.start = None
+        self.waypoints = []
         self.goal = None
+        self.goal_locked = False
         self.preview_path = None
         self.refresh()
 
@@ -143,9 +145,12 @@ class ManualGUI(tk.Tk):
         layout = getattr(self.spec, "layout", "union")
         if layout == "apartment" and exterior_goal is not None:
             self.goal = exterior_goal
+            self.goal_locked = True
         else:
             self.goal = None
+            self.goal_locked = False
         self.start = None
+        self.waypoints = []
         self.preview_path = None
         self.draw_scene()
         # Complexity: wall density from occupancy + segment count
@@ -160,9 +165,9 @@ class ManualGUI(tk.Tk):
         )
         self.comp_text.set(comp)
         if layout == "apartment":
-            self.status.set("Pick Start (left click). Goal is set automatically (exterior doorway).")
+            self.status.set("Pick Start (left click). Right-click to add up to 3 waypoints. Goal is set automatically (exterior doorway).")
         else:
-            self.status.set("Pick Start (left click), Goal (right-click or Control+click)")
+            self.status.set("Pick Start (left click), Goal (first right-click), then up to 3 waypoints (more right-clicks).")
 
     def draw_scene(self):
         self.ax.clear()
@@ -206,6 +211,10 @@ class ManualGUI(tk.Tk):
             self.ax.plot(xs, ys, color="red", linewidth=1.5)
         if self.start:
             self.ax.plot(self.start[0], self.start[1], marker="o", markersize=8)
+        if self.waypoints:
+            wx = [p[0] for p in self.waypoints]
+            wy = [p[1] for p in self.waypoints]
+            self.ax.scatter(wx, wy, marker="s", s=36, c="orange", edgecolors="black", linewidths=0.5, zorder=4)
         if self.goal:
             self.ax.plot(self.goal[0], self.goal[1], marker="x", markersize=10)
         self.ax.invert_yaxis()  # visually like a map editor
@@ -235,14 +244,22 @@ class ManualGUI(tk.Tk):
             getattr(event, "key", None) == "control"
         ):
             self.start = (x, y)
-            self.status.set(
-                f"Start set to ({x:.2f}, {y:.2f}). Right-click or Control+click to set Goal."
-            )
+            if getattr(self.spec, "layout", "union") == "apartment":
+                self.status.set(f"Start set to ({x:.2f}, {y:.2f}). Right-click to add up to 3 waypoints.")
+            else:
+                self.status.set(f"Start set to ({x:.2f}, {y:.2f}). Right-click to set Goal (once) and then add waypoints.")
         elif is_secondary:
-            self.goal = (x, y)
-            self.status.set(
-                f"Goal set to ({x:.2f}, {y:.2f}). Press 'Append to Dataset'."
-            )
+            layout = getattr(self.spec, "layout", "union")
+            if layout != "apartment" and not self.goal_locked and self.goal is None:
+                self.goal = (x, y)
+                self.goal_locked = True
+                self.status.set(f"Goal set to ({x:.2f}, {y:.2f}) and locked. Right-click to add up to 3 waypoints.")
+            else:
+                if len(self.waypoints) >= 3:
+                    self.status.set("Already selected 3 waypoints (max).")
+                else:
+                    self.waypoints.append((x, y))
+                    self.status.set(f"Added waypoint {len(self.waypoints)}/3 at ({x:.2f}, {y:.2f}).")
         # Recompute preview path if both points are available
         if self.start and self.goal:
             self.compute_preview_path()
@@ -255,13 +272,24 @@ class ManualGUI(tk.Tk):
         if self.occ is None:
             self.preview_path = None
             return
-        self.preview_path = astar_path(self.occ, self.start, self.goal, self.grid_res)
+        points = [self.start] + list(self.waypoints) + [self.goal]
+        full = []
+        for a, b in zip(points[:-1], points[1:]):
+            p = astar_path(self.occ, a, b, self.grid_res)
+            if p is None or len(p) < 2:
+                self.preview_path = None
+                return
+            if full:
+                full.extend(p[1:])
+            else:
+                full.extend(p)
+        self.preview_path = full
 
     def append_dataset(self):
         if self.start is None or self.goal is None:
             messagebox.showwarning(
                 "Missing points",
-                "Please set both Start (left-click) and Goal (right-click or Control+click).",
+                "Please set Start (left-click). For union layouts, set Goal (first right-click). For apartment layouts, Goal is set automatically.",
             )
             return
         # Build generator with chosen params; note: same seed+scenario_id used for determinism
@@ -287,7 +315,7 @@ class ManualGUI(tk.Tk):
         sid = int(self.scen_id_var.get())
         # Append manual sequence + single capture
         out = gen.append_manual_sequence(
-            sid, self.start, self.goal, seq_steps=self.seq_steps_var.get()
+            sid, self.start, self.goal, waypoints=self.waypoints, seq_steps=self.seq_steps_var.get()
         )
         if out is None:
             self.status.set(

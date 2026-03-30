@@ -82,6 +82,119 @@ def load_scan_path(
     with open(path_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
+def _round_xy_key(x: float, y: float, ndigits: int = 3) -> Tuple[float, float]:
+    return (round(float(x), ndigits), round(float(y), ndigits))
+
+
+def load_all_scan_paths(scenario_dir: str) -> List[Dict[str, object]]:
+    """Load all scan_paths/scan_XXXX.json files in a scenario folder."""
+    path_dir = os.path.join(scenario_dir, "scan_paths")
+    if not os.path.isdir(path_dir):
+        return []
+    out: List[Dict[str, object]] = []
+    for fn in sorted(os.listdir(path_dir)):
+        if not (fn.startswith("scan_") and fn.endswith(".json")):
+            continue
+        fp = os.path.join(path_dir, fn)
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                out.append(json.load(f))
+        except Exception:
+            continue
+    return out
+
+
+def build_full_route_from_scan(
+    scenario_dir: str,
+    scan_id: int,
+    max_legs: int = 10,
+) -> Optional[Dict[str, object]]:
+    """
+    Reconstruct a multi-leg route by chaining scan_paths entries:
+      leg i goal == leg i+1 start (x,y)
+
+    This is intended for datasets where each leg is stored as a separate scan_path file
+    (e.g., start->wp1, wp1->wp2, wp2->final).
+    """
+    first = load_scan_path(scenario_dir, scan_id)
+    if first is None:
+        return None
+
+    all_paths = load_all_scan_paths(scenario_dir)
+    by_start: Dict[Tuple[float, float], List[Dict[str, object]]] = {}
+    for sp in all_paths:
+        st = sp.get("start") or {}
+        try:
+            k = _round_xy_key(st["x"], st["y"])
+        except Exception:
+            continue
+        by_start.setdefault(k, []).append(sp)
+    for k in list(by_start.keys()):
+        # Prefer deterministic chaining: smallest scan_id first.
+        by_start[k].sort(key=lambda d: int(d.get("scan_id", 0)))
+
+    # Walk the chain.
+    chain: List[Dict[str, object]] = [first]
+    visited = set()
+    cur = first
+    for _ in range(max_legs - 1):
+        goal = cur.get("goal") or {}
+        try:
+            gk = _round_xy_key(goal["x"], goal["y"])
+        except Exception:
+            break
+        if gk in visited:
+            break
+        visited.add(gk)
+
+        nxt_candidates = by_start.get(gk, [])
+        if not nxt_candidates:
+            break
+        # Pick the first candidate whose goal differs (avoid trivial self-loops).
+        nxt = None
+        for cand in nxt_candidates:
+            cgoal = cand.get("goal") or {}
+            try:
+                ck = _round_xy_key(cgoal["x"], cgoal["y"])
+            except Exception:
+                continue
+            if ck != gk:
+                nxt = cand
+                break
+        if nxt is None:
+            break
+        chain.append(nxt)
+        cur = nxt
+
+    # Combine paths and collect waypoints (intermediate goals).
+    combined_pts: List[Dict[str, float]] = []
+    waypoints: List[Dict[str, float]] = []
+    for i, leg in enumerate(chain):
+        pts = leg.get("path") or []
+        if not isinstance(pts, list) or not pts:
+            continue
+        if i == 0:
+            combined_pts.extend(pts)
+        else:
+            combined_pts.extend(pts[1:])  # avoid duplicate join point
+        if i < len(chain) - 1:
+            g = leg.get("goal") or {}
+            try:
+                waypoints.append({"x": float(g["x"]), "y": float(g["y"])})
+            except Exception:
+                pass
+
+    start = (first.get("start") or {}).copy()
+    final_goal = (chain[-1].get("goal") or {}).copy()
+    return {
+        "scenario_id": first.get("scenario_id"),
+        "scan_id": first.get("scan_id"),
+        "start": start,
+        "goal": final_goal,
+        "waypoints": waypoints,
+        "path": combined_pts,
+    }
+
 
 def draw_scenario_on_ax(
     ax,
@@ -141,6 +254,25 @@ def draw_scenario_on_ax(
             xs = [float(p["x"]) for p in pts]
             ys = [float(p["y"]) for p in pts]
             ax.plot(xs, ys, color="blue", linewidth=2, label="ideal path")
+        # Optional: show intermediate waypoints (multi-leg route)
+        wps = scan_path.get("waypoints") or []
+        if wps:
+            try:
+                wx = [float(p["x"]) for p in wps]
+                wy = [float(p["y"]) for p in wps]
+                ax.scatter(
+                    wx,
+                    wy,
+                    marker="s",
+                    s=40,
+                    c="orange",
+                    edgecolors="black",
+                    linewidths=0.5,
+                    label="waypoints",
+                    zorder=4,
+                )
+            except Exception:
+                pass
         # Overlay start/goal markers from the path info
         start = scan_path.get("start")
         goal = scan_path.get("goal")
@@ -244,6 +376,14 @@ def main() -> None:
             "from scan_paths/scan_XXXX.json."
         ),
     )
+    ap.add_argument(
+        "--full_route",
+        action="store_true",
+        help=(
+            "If set (and --scan_id is provided), attempt to reconstruct and plot the full multi-leg "
+            "route (start + waypoints + final goal) by chaining scan_paths files."
+        ),
+    )
     args = ap.parse_args()
 
     scenario_dir = os.path.join(args.root, f"scenario_{args.scenario_id:04d}")
@@ -253,7 +393,11 @@ def main() -> None:
     scen_spec = load_scenario_spec(scenario_dir)
     scan_path = None
     if args.scan_id is not None:
-        scan_path = load_scan_path(scenario_dir, args.scan_id)
+        scan_path = (
+            build_full_route_from_scan(scenario_dir, args.scan_id)
+            if args.full_route
+            else load_scan_path(scenario_dir, args.scan_id)
+        )
     pose = None if args.no_pose else load_first_pose(scenario_dir)
     # If a scan_id is provided, prefer its stored start pose for the overlay
     if scan_path is not None and not args.no_pose:

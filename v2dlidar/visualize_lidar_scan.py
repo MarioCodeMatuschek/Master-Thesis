@@ -28,6 +28,7 @@ from .lidar import LidarSpec
 from .visualize_scenario import (
     load_scenario_spec,
     load_scan_path,
+    build_full_route_from_scan,
     draw_scenario_on_ax,
 )
 
@@ -325,6 +326,14 @@ def main() -> None:
         help="Disable overlay of the ideal path from scan_paths/scan_XXXX.json.",
     )
     ap.add_argument(
+        "--full_route",
+        action="store_true",
+        help=(
+            "If set, attempt to reconstruct and overlay the full multi-leg route (start + waypoints + final goal) "
+            "by chaining scan_paths files. Requires scan_paths to be present."
+        ),
+    )
+    ap.add_argument(
         "--no_polar",
         action="store_true",
         help="Disable the polar LiDAR subplot (only show layout view).",
@@ -359,7 +368,11 @@ def main() -> None:
     # Optional ideal path overlay
     scan_path: Optional[Dict[str, object]] = None
     if not args.no_path:
-        scan_path = load_scan_path(scenario_dir, scan["scan_id"])
+        scan_path = (
+            build_full_route_from_scan(scenario_dir, scan["scan_id"])
+            if args.full_route
+            else load_scan_path(scenario_dir, scan["scan_id"])
+        )
 
     # Build figure with layout + optional polar view
     if args.no_polar:

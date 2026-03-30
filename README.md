@@ -25,18 +25,19 @@ python3.12 -m v2dlidar.cli auto \
   --out ./dataset \
   --layout union \
   --scenarios 10 \
-  --scans_per_scenario 500 \
-  --headings_per_pose 4 \
+  --scans_per_scenario 1 \
+  --headings_per_pose 1 \
   --seq_per_scenario 10 \
   --seq_steps 50
 
 # Example: automated generation with apartment layout (BSP floorplan)
 python3.12 -m v2dlidar.cli auto \
-  --out ./dataset \
+  --out ./new_testset \
   --layout apartment \
   --apt_iterations 2 \
   --scenarios 10 \
-  --scans_per_scenario 0 \
+  --scans_per_scenario 1 \
+  --headings_per_pose 1 \
   --seq_per_scenario 0 \
   --seq_steps 0
 
@@ -59,7 +60,7 @@ For each scenario folder `OUT_DIR/scenario_XXXX/` the following files are produc
 | `scenario_meta.json` | Scenario and LiDAR parameters (spec + lidar). |
 | `scans_long.csv` | Long-format table: one row per LiDAR ray (all scans concatenated). |
 | `sequences/seq_XXXX.json` | One file per navigation sequence (A* path + LiDAR at each step). |
-| `scan_paths/scan_XXXX.json` | One file per scan: ideal A* path from start to goal for that scan. |
+| `scan_paths/scan_XXXX.json` | One file per scan: ideal A* path for the current navigation *leg* (start → next target). |
 
 ### scenario_meta.json
 
@@ -109,7 +110,7 @@ All scans that share the same `(scenario_id, pose_x, pose_y, goal_x, goal_y)` co
 
 ### sequences/seq_XXXX.json
 
-Each file describes one navigation sequence (A* path from start to goal) with LiDAR scans at each step.
+Each file describes one navigation sequence with LiDAR scans at a small number of **key poses** along a multi-leg route.
 
 **Top-level fields:**
 
@@ -118,7 +119,7 @@ Each file describes one navigation sequence (A* path from start to goal) with Li
 - `goal`: `{ "x": float, "y": float }` goal position in meters.
 - `manual`: optional; if present, `true` for manually created sequences (GUI / manual CLI). Automated sequences do not include this key.
 - `steps`: list of per-time-step records, each with:
-  - `step`: integer index (0 to seq_steps-1).
+  - `step`: integer index.
   - `pose_x`, `pose_y`, `pose_yaw`: robot pose at this step (meters, radians).
   - `theta_deg`: list of per-ray angles for the scan at this step.
   - `ranges`: list of per-ray ranges (with noise and dropout) in meters.
@@ -127,7 +128,8 @@ Each file describes one navigation sequence (A* path from start to goal) with Li
 
 One file per scan that had a valid A* path. `scans_per_scenario` controls how many **poses** are sampled in a scenario, and `headings_per_pose` controls how many **scans (headings)** are taken at each pose, so the number of `scan_XXXX.json` files per scenario is:
 
-- `num_scan_files = scans_per_scenario × headings_per_pose`
+- `num_scan_files = scans_per_scenario × (1 + num_auto_waypoints) × headings_per_pose`
+  - Current auto behavior: `num_auto_waypoints = 2`, so `num_scan_files = scans_per_scenario × 3 × headings_per_pose`
 
 Each file links one `(scenario_id, scan_id)` in `scans_long.csv` to its planned path.
 
@@ -136,8 +138,8 @@ Each file links one `(scenario_id, scan_id)` in `scans_long.csv` to its planned 
 - `scenario_id`: integer scenario ID.
 - `scan_id`: integer scan ID (matches rows in `scans_long.csv`).
 - `start`: `{ "x", "y", "yaw" }` start pose in meters and radians.
-- `goal`: `{ "x", "y" }` goal position in meters.
-- `path`: list of `{ "x", "y" }` points in meters along the ideal A* path from start to goal.
+- `goal`: `{ "x", "y" }` goal position in meters for this scan’s **next target** (a waypoint or the final goal).
+- `path`: list of `{ "x", "y" }` points in meters along the ideal A* path for this **leg**.
 
 ## Sequences and `seq_steps`
 
@@ -149,16 +151,16 @@ Two main data types:
 
 - **Sequences** (`sequences/seq_XXXX.json`):
   - Each file is a trajectory from a start to a goal inside a scenario.
-  - The path is computed with A*, then subsampled to `seq_steps` points.
-  - At each point, a LiDAR scan is simulated and stored as a `step`.
+  - The path is computed as a **multi-leg** route (start → waypoints → final goal).
+  - LiDAR is stored only at **key poses** (start + waypoints; the final goal pose is not scanned).
 
-`seq_steps` controls **how many samples you take along a fixed path**:
+`seq_steps` is kept for compatibility with older runs / configs, but sequences now store scans at key poses rather than subsampling every path point.
 
 - Larger `seq_steps` → more steps per sequence, finer sampling, longer sequences.
 - Smaller `seq_steps` → fewer steps, coarser sampling, shorter sequences.
 
 ## Manual GUI (pick start/goal and append to dataset)
-You can launch a Tkinter + Matplotlib GUI to visualize the scenario, pick a **Start** (left click) and **Goal** (right-click or Control+click on Mac), and append the resulting **manual sequence** and **single-capture CSV** to the dataset folder.
+You can launch a Tkinter + Matplotlib GUI to visualize the scenario, pick a **Start** (left click), then select intermediary waypoints and a final goal (layout-dependent), and append the resulting **manual sequence** and **single-capture CSV** to the dataset folder.
 
 ```bash
 python3.12 -m v2dlidar.gui_manual
@@ -171,14 +173,18 @@ python3.12 -m v2dlidar.gui_manual
 - **Seq steps**: number of steps along the A* path when appending a manual sequence (and for path preview).
 - Use **Generate/Refresh** to regenerate the scene (respects layout and seed).
 - **Complexity** panel: segment count and wall density.
-- After picking Start and Goal, click **Append to Dataset (Manual)**. Files are saved under the chosen output dir:
+- **Point picking**:
+  - **Left click**: set **Start**
+  - **Apartment layout**: final goal is auto-selected at the exterior doorway (fixed / not editable). **Right-click** adds up to **3 waypoints**.
+  - **Union layout**: the **first right-click** sets the final goal (then it is treated as fixed); subsequent right-clicks add up to **3 waypoints**.
+- After picking points, click **Append to Dataset (Manual)**. Files are saved under the chosen output dir:
   - `sequences/seq_XXXX_manual.json` (next free index)
   - `single_capture.csv` (720 rows @ 0.5°)
 
 Start/Goal and A* path work the same for both layouts; occupancy and pathfinding use the same segment-based pipeline.
 
 ### Path preview toggle
-Enable/disable **Preview planned path** to overlay the ideal A* path between Start and Goal before saving. The preview recomputes when you pick Start/Goal or regenerate the scenario. **Seq steps** controls how many points are shown along the path (and how many are written when appending). All clicks for Start/Goal are constrained to the free interior (off walls and inside the map).
+Enable/disable **Preview planned path** to overlay the ideal A* path across the full route (Start → waypoints → Goal) before saving. The preview recomputes when you pick points or regenerate the scenario. All clicks are constrained to the free interior (off walls and inside the map).
 
 
 ### Scenario Visualization
@@ -194,10 +200,16 @@ python3.12 -m v2dlidar.visualize_scenario --root ./dataset_10x1 --scenario_id 0
 # Walls + ideal path + start/goal for a specific scan (from scan_paths/scan_XXXX.json)
 python3.12 -m v2dlidar.visualize_scenario --root ./dataset_10x1 --scenario_id 0 --scan_id 0
 
+# Full multi-leg route (start + waypoints + final target), reconstructed from scan_paths
+python3.12 -m v2dlidar.visualize_scenario --root ./dataset_10x1 --scenario_id 0 --scan_id 0 --full_route
+
 # Layout + LiDAR parameterization (single noisy scan)
 # Left: walls, rooms/doors, pose, path, and rays in world coordinates
 # Right: robot-centric polar view (0° = forward) of noisy vs. noise-free ranges and dropouts
 python3.12 -m v2dlidar.visualize_lidar_scan --root ./dataset --scenario_id 0 --scan_id 0
+
+# Same scan, but overlay the full reconstructed multi-leg route
+python3.12 -m v2dlidar.visualize_lidar_scan --root ./dataset --scenario_id 0 --scan_id 0 --full_route
 
 # Raw wall segments (geometry used by LiDAR and planner)
 # Left: existing room/door layout (apartment view)
@@ -214,13 +226,14 @@ python3.12 -m v2dlidar.visualize_segments --root ./dataset --scenario_id 0 --seg
 - `--scenario_id`: which scenario to load (e.g. `0` for `scenario_0000`).
 - `--scan_id`: optional; overlays that scan's ideal path and start/goal from `scan_paths/scan_XXXX.json`.
 - `--no_pose`: omit the LiDAR pose arrow overlay.
+- `--full_route`: reconstruct and overlay the full multi-leg route (start + waypoints + final goal) by chaining `scan_paths` legs.
 
 For `visualize_lidar_scan`:
 - It always reads the per-scenario LiDAR spec from `scenario_meta.json` (`lidar` block), so `fov_deg`, `num_rays`, `max_range`, `range_noise_std`, and `dropout_prob` can vary between scenarios.
 - The left subplot reuses the layout drawing from `visualize_scenario` in **world coordinates** and overlays:
   - The LiDAR pose for the selected scan.
   - All noisy rays (world-frame lines) and their ideal noise-free hit points.
-  - The ideal A* path and start/goal (if available in `scan_paths/scan_XXXX.json`, unless `--no_path` is set).
+  - The ideal A* leg path and start/goal (if available in `scan_paths/scan_XXXX.json`, unless `--no_path` is set). With `--full_route`, it overlays the full multi-leg route.
 - The right subplot (unless `--no_polar` is passed) shows a **robot-centric** polar plot of:
   - Beam angles **relative to the robot’s heading** for that scan (0° = forward).
   - Noise-free ranges (baseline).
@@ -262,15 +275,16 @@ DONE 8. Goal should be auto-set outside of the scenario - aka resemble a door to
 
 DONE 9. Make sure a target hit is recorded by the lidar as well and is not passed through.
 
-10. There should be automatic intermediary points on the way to the outside (increase the path length)
+DONE 10. There should be automatic intermediary points on the way to the outside (increase the path length)
 
-11. a user should be able to manually set start and intermediary points in manual UI
+DONE 11. a user should be able to manually set start and intermediary points in manual UI
     for the intermediate points reuse the right-click logic i still have for the endpoint, this point should not be alterable anymore) - aka change from endpoint to x intermeidate points via right-click on the mouse.
 
-12. Make sure the A* path planner works as indented and respects walls of rooms in the apartment scenarios
-
+12. Validate that the auto-intermediary waypoints did not break the logic (scans.csv file and lidar measuring + lidar visualization, consider the scan handling at the final target vs. the intermediary target) Validate how the "valid" value is recorded, check also how the "hit" logic for the variable has been altered
 
 13. Make sure the manually created samples are properly appended to a shared dataset folder (additional scenario in dataset folder with same documents required scans_long.csv, meta.json and scan paths for the different orientations, sequences if requested)
+
+14. Make sure the A* path planner works as indented and respects walls of rooms in the apartment scenarios
 
 ----- Not for now ---------
 

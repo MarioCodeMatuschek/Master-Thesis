@@ -35,8 +35,8 @@ def main():
 
     auto = sub.add_parser("auto", parents=[common, lid])
     auto.add_argument("--scenarios", type=int, default=10)
-    auto.add_argument("--scans_per_scenario", type=int, default=2000)
-    auto.add_argument("--headings_per_pose", type=int, default=4)
+    auto.add_argument("--scans_per_scenario", type=int, default=1)
+    auto.add_argument("--headings_per_pose", type=int, default=1)
     auto.add_argument("--seq_per_scenario", type=int, default=50)
     auto.add_argument("--seq_steps", type=int, default=100)
     auto.add_argument("--grid_res", type=float, default=0.1)

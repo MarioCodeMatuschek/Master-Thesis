@@ -280,11 +280,11 @@ DONE 10. There should be automatic intermediary points on the way to the outside
 DONE 11. a user should be able to manually set start and intermediary points in manual UI
     for the intermediate points reuse the right-click logic i still have for the endpoint, this point should not be alterable anymore) - aka change from endpoint to x intermeidate points via right-click on the mouse.
 
-12. Validate that the auto-intermediary waypoints did not break the logic (scans.csv file and lidar measuring + lidar visualization, consider the scan handling at the final target vs. the intermediary target) Validate how the "valid" value is recorded, check also how the "hit" logic for the variable has been altered
+DONE 12. Validate that the auto-intermediary waypoints did not break the logic (scans.csv file and lidar measuring + lidar visualization, consider the scan handling at the final target vs. the intermediary target) Validate how the "valid" value is recorded, check also how the "hit" logic for the variable has been altered
 
 13. Make sure the manually created samples are properly appended to a shared dataset folder (additional scenario in dataset folder with same documents required scans_long.csv, meta.json and scan paths for the different orientations, sequences if requested)
 
-14. Make sure the A* path planner works as indented and respects walls of rooms in the apartment scenarios
+DONE 14. Make sure the A* path planner works as indented and respects walls of rooms in the apartment scenarios
 
 ----- Not for now ---------
 

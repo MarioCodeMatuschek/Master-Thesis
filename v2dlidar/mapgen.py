@@ -472,13 +472,14 @@ def _apartment_segments_from_doors(
     Build wall segments from rooms and door list.
 
     Outer boundary is included, with optional doorway gaps carved on the *outer* boundary via `exterior_doors`.
-    Interior walls are represented by wall segments with gaps at each *interior* door.
+    Interior walls are built for *all* shared room walls, with gaps carved at each *interior* door.
 
     Door tuple format: (dx, dy, orientation, width_used)
       - orientation == "vertical": wall at x == dx, doorway centered at y == dy
       - orientation == "horizontal": wall at y == dy, doorway centered at x == dx
     """
     eps = 1e-6
+    tol_wall = 0.1
     segments: List[Segment] = []
     exterior_doors = exterior_doors or []
 
@@ -532,21 +533,56 @@ def _apartment_segments_from_doors(
         if x2 > x1 + eps:
             segments.append(Segment(x1, height, x2, height))
 
-    for door in doors:
-        dx, dy, orientation, width_used = door
-        half_gap = width_used / 2.0
-        if orientation == "vertical":
-            y_min, y_max = _apt_wall_extent_for_door(rooms, dx, dy, "vertical")
-            if y_min < dy - half_gap - eps:
-                segments.append(Segment(dx, y_min, dx, dy - half_gap))
-            if dy + half_gap + eps < y_max:
-                segments.append(Segment(dx, dy + half_gap, dx, y_max))
-        else:
-            x_min, x_max = _apt_wall_extent_for_door(rooms, dx, dy, "horizontal")
-            if x_min < dx - half_gap - eps:
-                segments.append(Segment(x_min, dy, dx - half_gap, dy))
-            if dx + half_gap + eps < x_max:
-                segments.append(Segment(dx + half_gap, dy, x_max, dy))
+    # ------------------------------------------------------------------
+    # Interior walls: build all shared walls between rooms, then carve
+    # door gaps out of those walls. This guarantees that every visual
+    # wall between rooms has a corresponding planner segment, while
+    # doors become openings in those segments.
+    # ------------------------------------------------------------------
+    # Collect shared wall extents between room pairs.
+    walls: dict = {}
+    for i in range(len(rooms)):
+        r1 = rooms[i]
+        for j in range(i + 1, len(rooms)):
+            r2 = rooms[j]
+            ext = _apt_shared_wall_extent(r1, r2)
+            if ext is None:
+                continue
+            orientation, line_val, range_lo, range_hi = ext
+            key = (orientation, line_val)
+            walls.setdefault(key, []).append((range_lo, range_hi))
+
+    # For each unique wall, merge intervals and subtract any interior
+    # door gaps that lie on that wall, then emit remaining segments.
+    for (orientation, line_val), intervals in walls.items():
+        merged = _merge_intervals(intervals)
+
+        # Subtract all doors that lie on this wall.
+        for dx, dy, door_orient, width_used in doors:
+            if door_orient != orientation:
+                continue
+            half_gap = width_used / 2.0
+            if orientation == "vertical":
+                if abs(dx - line_val) >= tol_wall:
+                    continue
+                gap_lo = dy - half_gap
+                gap_hi = dy + half_gap
+            else:  # horizontal wall
+                if abs(dy - line_val) >= tol_wall:
+                    continue
+                gap_lo = dx - half_gap
+                gap_hi = dx + half_gap
+            merged = _subtract_gap(merged, gap_lo, gap_hi)
+
+        # Emit remaining wall segments.
+        for a, b in merged:
+            if b <= a + eps:
+                continue
+            if orientation == "vertical":
+                segments.append(Segment(line_val, a, line_val, b))
+            else:
+                segments.append(Segment(a, line_val, b, line_val))
+
     return segments
 
 

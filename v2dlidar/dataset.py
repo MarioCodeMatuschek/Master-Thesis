@@ -85,17 +85,19 @@ class DatasetGenerator:
         if base_path is None or len(base_path) < 2:
             return None, None, None
 
-        # Prefer waypoints closer to the final target (late in the baseline route).
-        # For 2 waypoints, anchors at 70% and 85% along the baseline path.
-        # For more, spread them over [0.65, 0.9].
+        # Prefer waypoints closer to the final target (late in the baseline route),
+        # but place the first one noticeably earlier so that the route visibly bends
+        # before approaching the exit.
+        # For 2 waypoints, anchors at 40% and 85% along the baseline path.
+        # For more, spread them over [0.4, 0.9].
         if n_waypoints == 0:
             return [start_xy], [final_goal_xy], [base_path]
         if n_waypoints == 1:
             fracs = [0.8]
         elif n_waypoints == 2:
-            fracs = [0.70, 0.85]
+            fracs = [0.40, 0.85]
         else:
-            fracs = np.linspace(0.65, 0.9, n_waypoints).tolist()
+            fracs = np.linspace(0.4, 0.9, n_waypoints).tolist()
 
         def anchor_at(frac: float):
             idx = int(np.clip(round(frac * (len(base_path) - 1)), 0, len(base_path) - 1))

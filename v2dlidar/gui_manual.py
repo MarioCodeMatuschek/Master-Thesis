@@ -165,9 +165,9 @@ class ManualGUI(tk.Tk):
         )
         self.comp_text.set(comp)
         if layout == "apartment":
-            self.status.set("Pick Start (left click). Right-click to add up to 3 waypoints. Goal is set automatically (exterior doorway).")
+            self.status.set("Pick Start (left click). Right-click to add up to 2 waypoints. Goal is set automatically (exterior doorway).")
         else:
-            self.status.set("Pick Start (left click), Goal (first right-click), then up to 3 waypoints (more right-clicks).")
+            self.status.set("Pick Start (left click), Goal (first right-click), then up to 2 waypoints (more right-clicks).")
 
     def draw_scene(self):
         self.ax.clear()
@@ -245,7 +245,7 @@ class ManualGUI(tk.Tk):
         ):
             self.start = (x, y)
             if getattr(self.spec, "layout", "union") == "apartment":
-                self.status.set(f"Start set to ({x:.2f}, {y:.2f}). Right-click to add up to 3 waypoints.")
+                self.status.set(f"Start set to ({x:.2f}, {y:.2f}). Right-click to add up to 2 waypoints.")
             else:
                 self.status.set(f"Start set to ({x:.2f}, {y:.2f}). Right-click to set Goal (once) and then add waypoints.")
         elif is_secondary:
@@ -253,13 +253,13 @@ class ManualGUI(tk.Tk):
             if layout != "apartment" and not self.goal_locked and self.goal is None:
                 self.goal = (x, y)
                 self.goal_locked = True
-                self.status.set(f"Goal set to ({x:.2f}, {y:.2f}) and locked. Right-click to add up to 3 waypoints.")
+                self.status.set(f"Goal set to ({x:.2f}, {y:.2f}) and locked. Right-click to add up to 2 waypoints.")
             else:
-                if len(self.waypoints) >= 3:
-                    self.status.set("Already selected 3 waypoints (max).")
+                if len(self.waypoints) >= 2:
+                    self.status.set("Already selected 2 waypoints (max).")
                 else:
                     self.waypoints.append((x, y))
-                    self.status.set(f"Added waypoint {len(self.waypoints)}/3 at ({x:.2f}, {y:.2f}).")
+                    self.status.set(f"Added waypoint {len(self.waypoints)}/2 at ({x:.2f}, {y:.2f}).")
         # Recompute preview path if both points are available
         if self.start and self.goal:
             self.compute_preview_path()
@@ -313,9 +313,9 @@ class ManualGUI(tk.Tk):
         )
         gen = DatasetGenerator(out_dir, lidar, scen, cfg)
         sid = int(self.scen_id_var.get())
-        # Append manual sequence + single capture
-        out = gen.append_manual_sequence(
-            sid, self.start, self.goal, waypoints=self.waypoints, seq_steps=self.seq_steps_var.get()
+        # Append manual scans in auto-dataset structure (scenario_meta.json, scans_long.csv, scan_paths/*)
+        out = gen.append_manual_scans_auto_style(
+            sid, self.start, self.goal, waypoints=self.waypoints
         )
         if out is None:
             self.status.set(
@@ -327,10 +327,10 @@ class ManualGUI(tk.Tk):
             )
         else:
             self.status.set(
-                f"Appended manual sequence and single_capture to scenario_{sid:04d}."
+                f"Appended manual scans to scenario_{sid:04d}."
             )
             messagebox.showinfo(
-                "Saved", f"Appended:\n{out}\n...and updated single_capture.csv"
+                "Saved", f"Wrote:\n{out}\n...plus scenario_meta.json and scan_paths/"
             )
 
 def main():

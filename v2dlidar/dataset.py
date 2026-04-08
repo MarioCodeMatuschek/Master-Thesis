@@ -415,6 +415,292 @@ class DatasetGenerator:
         write_scan_long_csv(os.path.join(out_dir, "single_capture.csv"), header, rows())
         return os.path.join(out_dir, "single_capture.csv")
 
+    def append_manual_scans_auto_style(
+        self,
+        scenario_id: int,
+        start: Tuple[float, float],
+        goal: Tuple[float, float],
+        waypoints: Optional[List[Tuple[float, float]]] = None,
+        n_waypoints: int = 2,
+    ):
+        """
+        Append manual scans in the same structure/schema as automatic datasets:
+        - scenario_XXXX/scenario_meta.json
+        - scenario_XXXX/scans_long.csv (one sweep per scan_id)
+        - scenario_XXXX/scan_paths/scan_XXXX.json (one per scan)
+
+        Manual export is limited to scans at key poses only:
+        start + `n_waypoints` intermediary waypoints (final goal excluded).
+        """
+        import numpy as np, math, os
+
+        if n_waypoints != 2:
+            raise ValueError("Manual append currently supports exactly 2 intermediary waypoints (n_waypoints=2).")
+
+        if waypoints is None:
+            waypoints = []
+        waypoints = list(waypoints)[:n_waypoints]
+
+        # Recreate deterministic scenario and interior-aware occupancy
+        spec_kwargs = vars(self.scen_spec).copy()
+        spec_kwargs["seed"] = self.scen_spec.seed + scenario_id
+        segments, spec, interior, res, exterior_goal = generate_scenario(ScenarioSpec(**spec_kwargs))
+        occ_walls, _ = occupancy_from_segments(segments, spec.width, spec.height, res)
+        occ = occ_walls.copy()
+        occ[interior == 0] = 1
+
+        def _snap_to_free_xy(
+            xy: Tuple[float, float],
+            max_radius_cells: int = 15,
+        ) -> Optional[Tuple[float, float]]:
+            """Snap xy to nearest free occupancy cell (manual-only robustness)."""
+            H, W = occ.shape
+            gx = int(np.clip(xy[0] / res, 0, W - 1))
+            gy = int(np.clip(xy[1] / res, 0, H - 1))
+            if occ[gy, gx] == 0:
+                return (gx * res, gy * res)
+
+            for r in range(1, max_radius_cells + 1):
+                x0 = max(0, gx - r)
+                x1 = min(W - 1, gx + r)
+                y0 = max(0, gy - r)
+                y1 = min(H - 1, gy + r)
+
+                # top + bottom rows
+                for nx in range(x0, x1 + 1):
+                    if occ[y0, nx] == 0:
+                        return (nx * res, y0 * res)
+                    if occ[y1, nx] == 0:
+                        return (nx * res, y1 * res)
+
+                # left + right cols (excluding corners)
+                for ny in range(y0 + 1, y1):
+                    if occ[ny, x0] == 0:
+                        return (x0 * res, ny * res)
+                    if occ[ny, x1] == 0:
+                        return (x1 * res, ny * res)
+
+            return None
+
+        def _pt(xy: Optional[Tuple[float, float]]):
+            return None if xy is None else {"x": float(xy[0]), "y": float(xy[1])}
+
+        orig_start = start
+        orig_goal = goal
+        orig_waypoints = list(waypoints)
+
+        snapped_start = _snap_to_free_xy(orig_start)
+        snapped_goal = _snap_to_free_xy(orig_goal)
+        snapped_waypoints: List[Tuple[float, float]] = []
+        for wp in orig_waypoints:
+            swp = _snap_to_free_xy(wp)
+            if swp is None:
+                snapped_waypoints = []
+                break
+            snapped_waypoints.append(swp)
+
+        if snapped_start is None or snapped_goal is None or (len(orig_waypoints) > 0 and len(snapped_waypoints) != len(orig_waypoints)):
+            scen_dir = os.path.join(self.out_dir, f"scenario_{scenario_id:04d}")
+            scan_paths_dir = os.path.join(scen_dir, "scan_paths")
+            os.makedirs(scan_paths_dir, exist_ok=True)
+            write_json(
+                os.path.join(scan_paths_dir, "last_manual_failed.json"),
+                {
+                    "reason": "snap_failed",
+                    "scenario_id": scenario_id,
+                    "start": {"x": float(orig_start[0]), "y": float(orig_start[1])},
+                    "goal": {"x": float(orig_goal[0]), "y": float(orig_goal[1])},
+                    "waypoints": [{"x": float(x), "y": float(y)} for (x, y) in orig_waypoints],
+                    "snapped": {
+                        "start": _pt(snapped_start),
+                        "goal": _pt(snapped_goal),
+                        "waypoints": [{"x": float(x), "y": float(y)} for (x, y) in snapped_waypoints],
+                    },
+                },
+            )
+            return None
+
+        start = snapped_start
+        goal = snapped_goal
+        waypoints = snapped_waypoints
+
+        # Ensure we have exactly 2 waypoints: use provided ones when present, otherwise
+        # auto-sample near a baseline A* route so we always export 3 scans total.
+        if len(waypoints) < n_waypoints:
+            rng_wp = random.Random(self.cfg.seed + scenario_id + 4242)
+            key_poses, leg_goals, leg_paths = self._plan_multi_leg(
+                occ, res, start, goal, rng_wp, n_waypoints=n_waypoints
+            )
+            if key_poses is None:
+                scen_dir = os.path.join(self.out_dir, f"scenario_{scenario_id:04d}")
+                scan_paths_dir = os.path.join(scen_dir, "scan_paths")
+                os.makedirs(scan_paths_dir, exist_ok=True)
+                write_json(
+                    os.path.join(scan_paths_dir, "last_manual_failed.json"),
+                    {
+                        "reason": "no_path",
+                        "scenario_id": scenario_id,
+                        "start": {"x": float(orig_start[0]), "y": float(orig_start[1])},
+                        "goal": {"x": float(orig_goal[0]), "y": float(orig_goal[1])},
+                        "waypoints": [{"x": float(x), "y": float(y)} for (x, y) in orig_waypoints],
+                        "snapped": {
+                            "start": _pt(start),
+                            "goal": _pt(goal),
+                            "waypoints": [{"x": float(x), "y": float(y)} for (x, y) in waypoints],
+                        },
+                    },
+                )
+                return None
+            # key_poses includes start + 2 waypoints; drop the start.
+            waypoints = list(key_poses[1:])
+
+        if len(waypoints) != n_waypoints:
+            scen_dir = os.path.join(self.out_dir, f"scenario_{scenario_id:04d}")
+            scan_paths_dir = os.path.join(scen_dir, "scan_paths")
+            os.makedirs(scan_paths_dir, exist_ok=True)
+            write_json(
+                os.path.join(scan_paths_dir, "last_manual_failed.json"),
+                {
+                    "reason": "insufficient_waypoints",
+                    "scenario_id": scenario_id,
+                    "start": {"x": float(orig_start[0]), "y": float(orig_start[1])},
+                    "goal": {"x": float(orig_goal[0]), "y": float(orig_goal[1])},
+                    "waypoints": [{"x": float(x), "y": float(y)} for (x, y) in orig_waypoints],
+                    "expected_waypoints": int(n_waypoints),
+                    "snapped": {
+                        "start": _pt(start),
+                        "goal": _pt(goal),
+                        "waypoints": [{"x": float(x), "y": float(y)} for (x, y) in waypoints],
+                    },
+                },
+            )
+            return None
+
+        # Plan multi-leg paths (start -> wp1 -> wp2 -> goal).
+        points = [start] + list(waypoints) + [goal]
+        leg_paths: List[List[Tuple[float, float]]] = []
+        for leg_idx, (a, b) in enumerate(zip(points[:-1], points[1:])):
+            p = astar_path(occ, a, b, res)
+            if p is None or len(p) < 2:
+                scen_dir = os.path.join(self.out_dir, f"scenario_{scenario_id:04d}")
+                scan_paths_dir = os.path.join(scen_dir, "scan_paths")
+                os.makedirs(scan_paths_dir, exist_ok=True)
+                write_json(
+                    os.path.join(scan_paths_dir, "last_manual_failed.json"),
+                    {
+                        "reason": "no_path",
+                        "scenario_id": scenario_id,
+                        "failed_leg_index": int(leg_idx),
+                        "start": {"x": float(orig_start[0]), "y": float(orig_start[1])},
+                        "goal": {"x": float(orig_goal[0]), "y": float(orig_goal[1])},
+                        "waypoints": [{"x": float(x), "y": float(y)} for (x, y) in orig_waypoints],
+                        "snapped": {
+                            "start": _pt(start),
+                            "goal": _pt(goal),
+                            "waypoints": [{"x": float(x), "y": float(y)} for (x, y) in waypoints],
+                        },
+                        "failed_leg": {
+                            "from": {"x": float(a[0]), "y": float(a[1])},
+                            "to": {"x": float(b[0]), "y": float(b[1])},
+                        },
+                    },
+                )
+                return None
+            leg_paths.append(p)
+
+        scen_dir = os.path.join(self.out_dir, f"scenario_{scenario_id:04d}")
+        os.makedirs(scen_dir, exist_ok=True)
+        scan_paths_dir = os.path.join(scen_dir, "scan_paths")
+        os.makedirs(scan_paths_dir, exist_ok=True)
+
+        # Match auto behavior: randomize LiDAR noise per scenario deterministically.
+        rng = random.Random(self.cfg.seed + scenario_id)
+        lidar_spec = LidarSpec(
+            fov_deg=self.lidar_spec.fov_deg,
+            num_rays=self.lidar_spec.num_rays,
+            max_range=self.lidar_spec.max_range,
+            range_noise_std=rng.uniform(0.005, 0.05),
+            dropout_prob=rng.uniform(0.01, 0.2),
+        )
+        lidar = LidarSimulator(lidar_spec, segments)
+
+        # Write scenario_meta.json in the same schema as automated generation.
+        write_json(
+            os.path.join(scen_dir, "scenario_meta.json"),
+            {"spec": vars(spec), "lidar": vars(lidar_spec)},
+        )
+
+        scans_header = [
+            "scenario_id",
+            "scan_id",
+            "t",
+            "pose_x",
+            "pose_y",
+            "pose_yaw",
+            "goal_x",
+            "goal_y",
+            "theta_deg",
+            "r_m",
+            "hit_x",
+            "hit_y",
+            "valid",
+            "noise_free_r_m",
+        ]
+
+        # Key poses: start + 2 waypoints (exclude final goal)
+        key_poses = [start] + list(waypoints)
+        leg_goals = list(waypoints) + [goal]
+
+        def scan_rows():
+            for scan_id, (task_pose_xy, task_goal_xy, task_path) in enumerate(
+                zip(key_poses, leg_goals, leg_paths)
+            ):
+                tx, ty = task_pose_xy
+                gx, gy = task_goal_xy
+                yaw = math.atan2(gy - ty, gx - tx)
+                write_json(
+                    os.path.join(scan_paths_dir, f"scan_{scan_id:04d}.json"),
+                    {
+                        "scenario_id": scenario_id,
+                        "scan_id": int(scan_id),
+                        "start": {"x": float(tx), "y": float(ty), "yaw": float(yaw)},
+                        "goal": {"x": float(gx), "y": float(gy)},
+                        "path": [{"x": float(px), "y": float(py)} for (px, py) in task_path],
+                    },
+                )
+                # Manual-only: enable target override when the (snapped) final goal is still
+                # close to the exterior goal returned by the generator (snapping can move it off-wall).
+                target_xy = None
+                if spec.layout == "apartment" and exterior_goal is not None and task_goal_xy == goal:
+                    dist_to_exterior = math.hypot(goal[0] - exterior_goal[0], goal[1] - exterior_goal[1])
+                    if dist_to_exterior <= 0.5:
+                        target_xy = goal
+                s = lidar.scan((tx, ty, yaw), rng=rng, noise_free=False, target_xy=target_xy)
+                s_nf = lidar.scan((tx, ty, yaw), rng=rng, noise_free=True, target_xy=target_xy)
+                for i in range(len(s["theta_deg"])):
+                    hit_x = s["hits"][i, 0]
+                    hit_y = s["hits"][i, 1]
+                    valid = int(np.isfinite(hit_x))
+                    yield [
+                        scenario_id,
+                        scan_id,
+                        0.0,
+                        tx,
+                        ty,
+                        yaw,
+                        float(gx),
+                        float(gy),
+                        float(s["theta_deg"][i]),
+                        float(s["ranges"][i]),
+                        float(hit_x) if valid else "",
+                        float(hit_y) if valid else "",
+                        valid,
+                        float(s_nf["noise_free_ranges"][i]),
+                    ]
+
+        write_scan_long_csv(os.path.join(scen_dir, "scans_long.csv"), scans_header, scan_rows())
+        return os.path.join(scen_dir, "scans_long.csv")
+
     def append_manual_sequence(
         self,
         scenario_id: int,

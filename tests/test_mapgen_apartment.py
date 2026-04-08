@@ -12,7 +12,7 @@ def test_apartment_connectivity_default():
     """With apt_verify_connectivity=True (default), free space must be one connected component."""
     for seed in [0, 1, 42, 123, 999]:
         spec = _apartment_spec(seed=seed)
-        segments, _, interior, res = generate_scenario(spec)
+        segments, _, interior, res, _ = generate_scenario(spec)
         n_comp, _ = free_space_connected_components(
             segments, spec.width, spec.height, res, interior=interior
         )
@@ -23,7 +23,7 @@ def test_apartment_connectivity_with_verify_true():
     """Explicit apt_verify_connectivity=True: free space must be one connected component."""
     for seed in [7, 100, 456]:
         spec = _apartment_spec(seed=seed, apt_verify_connectivity=True)
-        segments, _, interior, res = generate_scenario(spec)
+        segments, _, interior, res, _ = generate_scenario(spec)
         n_comp, _ = free_space_connected_components(
             segments, spec.width, spec.height, res, interior=interior
         )
@@ -60,7 +60,7 @@ def test_apartment_doors_not_at_tjunction():
 def test_apartment_layout_data_matches_scenario():
     """get_apartment_layout_data must return same (rooms, doors) as used for scenario segments."""
     spec = _apartment_spec(seed=42)
-    segments, _, _, _ = generate_scenario(spec)
+    segments, _, _, _, _ = generate_scenario(spec)
     layout_rooms, layout_doors = get_apartment_layout_data(spec)
     assert layout_rooms is not None and layout_doors is not None
     assert len(layout_doors) >= 1
@@ -84,7 +84,7 @@ def test_apt_verify_connectivity_false():
 def test_layout_data_doors_match_scenario():
     """Layout data (rooms, doors) matches what generate_scenario uses (same door count and positions)."""
     spec = _apartment_spec(seed=42)
-    segments, _, _, _ = generate_scenario(spec)
+    segments, _, _, _, _ = generate_scenario(spec)
     layout_rooms, layout_doors = get_apartment_layout_data(spec)
     assert layout_rooms is not None and layout_doors is not None
     # Regenerating with same spec must yield same door count
@@ -106,7 +106,7 @@ def test_connectivity_after_fallback():
     """Seeds that could previously be disconnected are now one connected component."""
     for seed in [0, 1, 42, 100, 123, 456, 999]:
         spec = _apartment_spec(seed=seed)
-        segments, _, interior, res = generate_scenario(spec)
+        segments, _, interior, res, _ = generate_scenario(spec)
         n_comp, _ = free_space_connected_components(
             segments, spec.width, spec.height, res, interior=interior
         )

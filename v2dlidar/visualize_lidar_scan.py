@@ -221,6 +221,8 @@ def draw_polar_lidar(
     ax,
     scan_data: Dict[str, np.ndarray],
     lidar_spec: LidarSpec,
+    show_target_hits: bool = False,
+    target_hit_tol_m: float = 0.15,
 ) -> None:
     """Draw a robot-centric polar view of one LiDAR scan (angle vs. range).
 
@@ -230,6 +232,9 @@ def draw_polar_lidar(
     r_m = scan_data["r_m"]
     noise_free_r_m = scan_data["noise_free_r_m"]
     valid = scan_data["valid"].astype(bool)
+    hit_x = scan_data.get("hit_x", None)
+    hit_y = scan_data.get("hit_y", None)
+    goal = scan_data.get("goal", None)
 
     # Convert stored world-frame angles to robot-centric angles by subtracting pose_yaw.
     pose = scan_data.get("pose")
@@ -261,6 +266,33 @@ def draw_polar_lidar(
             alpha=0.8,
             label="noisy range (valid)",
         )
+
+    # Target-hit overlay (opt-in so existing behavior is unchanged).
+    if (
+        show_target_hits
+        and goal is not None
+        and hit_x is not None
+        and hit_y is not None
+        and len(goal) == 2
+    ):
+        gx, gy = float(goal[0]), float(goal[1])
+        hx = np.asarray(hit_x, dtype=np.float32)
+        hy = np.asarray(hit_y, dtype=np.float32)
+        dist = np.hypot(hx - gx, hy - gy)
+        is_target_hit = valid & np.isfinite(dist) & (dist <= float(target_hit_tol_m))
+        if np.any(is_target_hit):
+            ax.scatter(
+                theta_rel[is_target_hit],
+                r_m[is_target_hit],
+                s=30,
+                c="limegreen",
+                marker="*",
+                edgecolors="black",
+                linewidths=0.5,
+                alpha=0.95,
+                label="target hit",
+                zorder=10,
+            )
 
     # Dropouts / invalid
     invalid = ~valid
@@ -339,6 +371,17 @@ def main() -> None:
         help="Disable the polar LiDAR subplot (only show layout view).",
     )
     ap.add_argument(
+        "--show_target_hits",
+        action="store_true",
+        help="Overlay rays whose hit point coincides with the scan goal (target hit) in the polar plot.",
+    )
+    ap.add_argument(
+        "--target_hit_tol_m",
+        type=float,
+        default=0.15,
+        help="Distance tolerance (m) used to classify a ray hit as a goal/target hit (default: 0.15).",
+    )
+    ap.add_argument(
         "--seed",
         type=int,
         default=None,
@@ -399,7 +442,13 @@ def main() -> None:
             title_extra=f"scan_id={scan['scan_id']}",
         )
         draw_lidar_rays_on_ax(ax_layout, pose, scan, lidar_spec)
-        draw_polar_lidar(ax_polar, scan, lidar_spec)
+        draw_polar_lidar(
+            ax_polar,
+            scan,
+            lidar_spec,
+            show_target_hits=bool(args.show_target_hits),
+            target_hit_tol_m=float(args.target_hit_tol_m),
+        )
 
     plt.tight_layout()
     plt.show()

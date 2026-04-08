@@ -160,7 +160,7 @@ Two main data types:
 - Smaller `seq_steps` → fewer steps, coarser sampling, shorter sequences.
 
 ## Manual GUI (pick start/goal and append to dataset)
-You can launch a Tkinter + Matplotlib GUI to visualize the scenario, pick a **Start** (left click), then select intermediary waypoints and a final goal (layout-dependent), and append the resulting **manual sequence** and **single-capture CSV** to the dataset folder.
+You can launch a Tkinter + Matplotlib GUI to visualize the scenario, pick a **Start** (left click), then select intermediary waypoints and a final goal (layout-dependent), and append the resulting manual scans in the **same output structure as automated datasets**.
 
 ```bash
 python3.12 -m v2dlidar.gui_manual
@@ -170,18 +170,21 @@ python3.12 -m v2dlidar.gui_manual
 - **Union**: scene is drawn as wall segments. Parameters include width/height, # Rectangles, seed.
 - **Apartment**: scene is drawn as **rooms** (filled rectangles) and **doors** (gaps + swing arcs). Parameters include **Apartment iterations** (BSP splits, default 2), Apartment rows/cols/door prob (kept for compatibility).
 - **Output dir** and **Scenario ID**: where to write `scenario_XXXX/` and which ID to use.
-- **Seq steps**: number of steps along the A* path when appending a manual sequence (and for path preview).
+- **Seq steps**: used only for the **path preview** resolution in the GUI (manual append writes exactly 3 sweeps: start + 2 waypoints).
 - Use **Generate/Refresh** to regenerate the scene (respects layout and seed).
 - **Complexity** panel: segment count and wall density.
 - **Point picking**:
   - **Left click**: set **Start**
-  - **Apartment layout**: final goal is auto-selected at the exterior doorway (fixed / not editable). **Right-click** adds up to **3 waypoints**.
-  - **Union layout**: the **first right-click** sets the final goal (then it is treated as fixed); subsequent right-clicks add up to **3 waypoints**.
+  - **Apartment layout**: final goal is auto-selected at the exterior doorway (fixed / not editable). **Right-click** adds up to **2 waypoints**.
+  - **Union layout**: the **first right-click** sets the final goal (then it is treated as fixed); subsequent right-clicks add up to **2 waypoints**.
 - After picking points, click **Append to Dataset (Manual)**. Files are saved under the chosen output dir:
-  - `sequences/seq_XXXX_manual.json` (next free index)
-  - `single_capture.csv` (720 rows @ 0.5°)
+  - `scenario_meta.json`
+  - `scans_long.csv` (3 sweeps total: start + 2 intermediary waypoints; 720 rows per sweep by default)
+  - `scan_paths/scan_XXXX.json` (one file per sweep)
 
 Start/Goal and A* path work the same for both layouts; occupancy and pathfinding use the same segment-based pipeline.
+If a picked point lies too close to a wall or exactly on the boundary (e.g. an exterior goal at `y=0`), the manual append path snaps Start/Waypoints/Goal to the nearest free occupancy cell before running A*. Automatic dataset generation is unchanged.
+On failure, it writes `scan_paths/last_manual_failed.json` with original vs. snapped points (and the failed leg index when applicable).
 
 ### Path preview toggle
 Enable/disable **Preview planned path** to overlay the ideal A* path across the full route (Start → waypoints → Goal) before saving. The preview recomputes when you pick points or regenerate the scenario. All clicks are constrained to the free interior (off walls and inside the map).
@@ -282,10 +285,13 @@ DONE 11. a user should be able to manually set start and intermediary points in 
 
 DONE 12. Validate that the auto-intermediary waypoints did not break the logic (scans.csv file and lidar measuring + lidar visualization, consider the scan handling at the final target vs. the intermediary target) Validate how the "valid" value is recorded, check also how the "hit" logic for the variable has been altered
 
-13. Make sure the manually created samples are properly appended to a shared dataset folder (additional scenario in dataset folder with same documents required scans_long.csv, meta.json and scan paths for the different orientations, sequences if requested)
+DONE 13. Make sure the manually created samples are properly appended to a shared dataset folder (additional scenario in dataset folder with same documents required scans_long.csv, meta.json and scan paths for the different orientations, sequences if requested)
 
 DONE 14. Make sure the A* path planner works as indented and respects walls of rooms in the apartment scenarios
 
+Note: Small mistake, in case of non-final legs, the actual final target is not considered as an open door but shown as a wall (it should actually be a door, but I do not care as it does not change the rest of the functionality)
+
+15. Check if the polar visualization for the manual and automatic cases match (the goal star for the automatic cases is placed as expected, but the manuals seem off or inverted somehow)
 ----- Not for now ---------
 
 

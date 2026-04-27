@@ -1,0 +1,18 @@
+ToDos:
+
+Define / choose the used models for the evaluation
+Define and implement navigation task formulation
+Given the data provided by the Lidar, what should the ML Model provide as output?
+Generate a representative training set using the data simulator
+Define dataset split strategy and split the dataset accordingly. 
+Work out Feature Engineering Pipeline (for classical machine learning models)
+Record data with Joey
+Compare simulated and real environments (using the defined metrics)
+Prepare Training Pipeline for ML Models
+Train first models 
+Optimize hyperparameters for the machine learning models
+Test simulator-trained models on joey’s real life scenarios and evaluate their performance
+Run explainability Analysis
+Write the Thesis
+
+Claude Details if needed can be found here: https://claude.ai/chat/5d8a1663-61fc-4dc0-a44e-8cf8329a4519

@@ -1,6 +1,6 @@
 ToDos:
 
-Define / choose the used models for the evaluation
+DONE - Define / choose the used models for the evaluation
     Questions to ask:
         1. is the actual code / implementation publically available
             If yes, implement exactly as is. Otherwise, take the architecture and build from scratch
@@ -21,6 +21,7 @@ Define / choose the used models for the evaluation
     Input: Lidar Map (robot state) + Robot-Goal Relationship
     Output: Q-Values for all possible actions with Post-Processing to Angular Velocity
     Use Case: Autonomous Car Parking in outdoor parking lots
+
 4. (Supervised NN-free ML) Decision tree (imitation learning) (2021)
     Input: Lidar Map + Goal Information + History
     Output: Concrete navigation command (action to take)
@@ -49,8 +50,14 @@ Non-used models:
     Output: Direction command to move + angular velocity
     Use Case: agricultural robot
 
-Define and implement navigation task formulation
-Given the data provided by the Lidar, what should the ML Model provide as output?
+Define and implement navigation task formulation + Define ML Task (input and output)
+    a. See Navigation & ML Task Formulation Doc on GDrive
+    (Open) b. Define output structure in detail
+    (Open) c. Define ML Task per model
+    (Open) d. Walk Through Open Design Question raised by Claude
+
+Adjust the simulator to hold the final goal per scenario in addition to the intermediary goal (for every scan ray)
+
 Generate a representative training set using the data simulator
 Define dataset split strategy and split the dataset accordingly. 
 Work out Feature Engineering Pipeline (for classical machine learning models)

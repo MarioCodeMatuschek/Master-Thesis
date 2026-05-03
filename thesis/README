@@ -4,7 +4,37 @@ DONE - Define / choose the used models for the evaluation
     DONE 1. is the actual code / implementation publically available
         If yes, implement exactly as is. Otherwise, take the architecture and build from scratch
 
- Used Models:
+IN PROGRESS Define and implement navigation task formulation + Define ML Task (input and output)
+    a. See Navigation & ML Task Formulation Doc on GDrive
+    (Open) b. Define output structure in detail
+    (Open) c. Define ML Task per model
+    (Open) d. Walk Through Open Design Question raised by Claude
+
+DONE Adjust the simulator to hold the final goal per scenario in addition to the intermediary goal (for every scan ray)
+
+Implement Models used for training and evaluation (Fetch Github or implement from paper)
+
+IN PROGRESS Generate a representative training set using the data simulator
+    DONE a. Initial samples have been manually created to see if the feature engineering pipeline works as intended
+    b. Full scale dataset creation
+
+Define dataset split strategy and split the dataset accordingly. 
+Work out Feature Engineering Pipeline (for classical machine learning models)
+Record data with Joey
+Compare simulated and real environments (using the defined metrics)
+Prepare Training Pipeline for ML Models
+Train first models 
+Optimize hyperparameters for the machine learning models
+Test simulator-trained models on joey’s real life scenarios and evaluate their performance
+Run explainability Analysis
+Write the Thesis
+
+Claude Details if needed can be found here: https://claude.ai/chat/5d8a1663-61fc-4dc0-a44e-8cf8329a4519
+
+
+Notes:
+
+Used Models:
 
  1. (Classic DL - ConvNets) TinyLidarNet (1D ConvNet) (2024)
     Input: Raw 1D Lidar Data (270° Field of View)
@@ -52,28 +82,3 @@ Non-used models:
     Input: 2D lidar map
     Output: Direction command to move + angular velocity
     Use Case: agricultural robot
-
-IN PROGRESS Define and implement navigation task formulation + Define ML Task (input and output)
-    a. See Navigation & ML Task Formulation Doc on GDrive
-    (Open) b. Define output structure in detail
-    (Open) c. Define ML Task per model
-    (Open) d. Walk Through Open Design Question raised by Claude
-
-DONE Adjust the simulator to hold the final goal per scenario in addition to the intermediary goal (for every scan ray)
-
-IN PROGRESS Generate a representative training set using the data simulator
-    DONE a. Initial samples have been manually created to see if the feature engineering pipeline works as intended
-    b. Full scale dataset creation
-
-Define dataset split strategy and split the dataset accordingly. 
-Work out Feature Engineering Pipeline (for classical machine learning models)
-Record data with Joey
-Compare simulated and real environments (using the defined metrics)
-Prepare Training Pipeline for ML Models
-Train first models 
-Optimize hyperparameters for the machine learning models
-Test simulator-trained models on joey’s real life scenarios and evaluate their performance
-Run explainability Analysis
-Write the Thesis
-
-Claude Details if needed can be found here: https://claude.ai/chat/5d8a1663-61fc-4dc0-a44e-8cf8329a4519

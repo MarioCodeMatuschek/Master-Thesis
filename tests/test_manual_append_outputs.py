@@ -47,8 +47,11 @@ def test_manual_append_writes_auto_style_outputs(tmp_path):
     # scans_long.csv: header + 3 sweeps * num_rays rows
     num_rays = lidar.num_rays
     with open(scen_dir / "scans_long.csv", "r", encoding="utf-8") as f:
-        n_lines = sum(1 for _ in f)
-    assert n_lines == 1 + 3 * num_rays
+        lines = f.readlines()
+    assert len(lines) == 1 + 3 * num_rays
+    header = lines[0].strip().split(",")
+    assert "goal_x" in header and "goal_y" in header
+    assert "final_goal_x" in header and "final_goal_y" in header
 
     with open(scen_dir / "scan_paths" / "scan_0000.json", "r", encoding="utf-8") as f:
         data = json.load(f)

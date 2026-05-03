@@ -204,6 +204,8 @@ class DatasetGenerator:
             "hit_y",
             "valid",
             "noise_free_r_m",
+            "final_goal_x",
+            "final_goal_y",
         ]
         scan_paths_dir = os.path.join(scen_dir, "scan_paths")
         ensure_dir(scan_paths_dir)
@@ -286,6 +288,8 @@ class DatasetGenerator:
                                 float(hit_y) if valid else "",
                                 valid,
                                 float(s_nf["noise_free_ranges"][i]),
+                                float(final_goal[0]),
+                                float(final_goal[1]),
                             ]
                         scan_id += 1
         write_scan_long_csv(os.path.join(scen_dir, "scans_long.csv"), scans_header, scan_rows())
@@ -645,6 +649,8 @@ class DatasetGenerator:
             "hit_y",
             "valid",
             "noise_free_r_m",
+            "final_goal_x",
+            "final_goal_y",
         ]
 
         # Key poses: start + 2 waypoints (exclude final goal)
@@ -696,6 +702,8 @@ class DatasetGenerator:
                         float(hit_y) if valid else "",
                         valid,
                         float(s_nf["noise_free_ranges"][i]),
+                        float(goal[0]),
+                        float(goal[1]),
                     ]
 
         write_scan_long_csv(os.path.join(scen_dir, "scans_long.csv"), scans_header, scan_rows())

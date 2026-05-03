@@ -1,0 +1,32 @@
+{
+  "spec": {
+    "width": 20.0,
+    "height": 20.0,
+    "n_rects": 20,
+    "rect_min": [
+      2.0,
+      2.0
+    ],
+    "rect_max": [
+      8.0,
+      6.0
+    ],
+    "wall_thickness": 0.1,
+    "seed": 6,
+    "outline_res": 0.1,
+    "layout": "apartment",
+    "apt_rows": 2,
+    "apt_cols": 3,
+    "apt_door_prob": 0.8,
+    "apt_min_door_width": 0.6,
+    "apt_verify_connectivity": true,
+    "apt_iterations": 2
+  },
+  "lidar": {
+    "fov_deg": 360.0,
+    "num_rays": 720,
+    "max_range": 12.0,
+    "range_noise_std": 0.04070030376927484,
+    "dropout_prob": 0.1661712680407481
+  }
+}

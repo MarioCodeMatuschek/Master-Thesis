@@ -1,9 +1,8 @@
 ToDos:
 
 DONE - Define / choose the used models for the evaluation
-    Questions to ask:
-        1. is the actual code / implementation publically available
-            If yes, implement exactly as is. Otherwise, take the architecture and build from scratch
+    DONE 1. is the actual code / implementation publically available
+        If yes, implement exactly as is. Otherwise, take the architecture and build from scratch
 
  Used Models:
 
@@ -11,21 +10,25 @@ DONE - Define / choose the used models for the evaluation
     Input: Raw 1D Lidar Data (270° Field of View)
     Output: Steering Angle + velocity
     Use Case: Autonomous Racing
+    Link to implementation: https://github.com/CSL-KU/TinyLidarNet/tree/main
 
  2. (Unsupervised NN-free ML) DBSCAN Clustering (2023)
     Input: Lidar Scan + Cartesian Point Cloud + History of Scans 
     Output: Line segments (obstacles on the path to the goal)
     Use Case: indoor robot navigation
+    Link to implementation: Possible Fit - https://github.com/viam-modules/obstacles-2d-lidar, otherwise fetch from paper
 
 3. (RL + DNN) Deep Q-Learning + GRU by Kim et al. (2020)
     Input: Lidar Map (robot state) + Robot-Goal Relationship
     Output: Q-Values for all possible actions with Post-Processing to Angular Velocity
     Use Case: Autonomous Car Parking in outdoor parking lots
+    Link to implementation: fetch from paper (Github not available)
 
 4. (Supervised NN-free ML) Decision tree (imitation learning) (2021)
     Input: Lidar Map + Goal Information + History
     Output: Concrete navigation command (action to take)
     Use Case: Robot Navigation in indoor environments with obstacles on the way
+    Link to implementation: fetch from paper (Github is not available)
 
 Non-used models:
 

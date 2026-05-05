@@ -4,15 +4,16 @@ DONE - Define / choose the used models for the evaluation
     DONE 1. is the actual code / implementation publically available
         If yes, implement exactly as is. Otherwise, take the architecture and build from scratch
 
-IN PROGRESS Define and implement navigation task formulation + Define ML Task (input and output)
+DONE Define and implement navigation task formulation + Define ML Task (input and output)
     a. See Navigation & ML Task Formulation Doc on GDrive
-    (Open) b. Define output structure in detail
-    (Open) c. Define ML Task per model
-    (Open) d. Walk Through Open Design Question raised by Claude
+    DONE b. Define output structure in detail
+    DONE c. Define ML Task per model
+    DONE d. Walk Through Open Design Question raised by Claude
 
 DONE Adjust the simulator to hold the final goal per scenario in addition to the intermediary goal (for every scan ray)
 
 Implement Models used for training and evaluation (Fetch Github or implement from paper)
+    a. Start with TinyLidar
 
 IN PROGRESS Generate a representative training set using the data simulator
     DONE a. Initial samples have been manually created to see if the feature engineering pipeline works as intended
@@ -30,7 +31,7 @@ Run explainability Analysis
 Write the Thesis
 
 Claude Details if needed can be found here: https://claude.ai/chat/5d8a1663-61fc-4dc0-a44e-8cf8329a4519
-
+Model Evaluation and interpretation ideas: https://claude.ai/chat/16b369a3-3a2a-43a2-8c17-b7b01e1b7a65
 
 Notes:
 
@@ -42,43 +43,46 @@ Used Models:
     Use Case: Autonomous Racing
     Link to implementation: https://github.com/CSL-KU/TinyLidarNet/tree/main
 
- 2. (Unsupervised NN-free ML) DBSCAN Clustering (2023)
+Non-used models:
+
+
+ 1. (Unsupervised NN-free ML) DBSCAN Clustering (2023)
     Input: Lidar Scan + Cartesian Point Cloud + History of Scans 
     Output: Line segments (obstacles on the path to the goal)
     Use Case: indoor robot navigation
     Link to implementation: Possible Fit - https://github.com/viam-modules/obstacles-2d-lidar, otherwise fetch from paper
 
-3. (RL + DNN) Deep Q-Learning + GRU by Kim et al. (2020)
+2. (RL + DNN) Deep Q-Learning + GRU by Kim et al. (2020)
     Input: Lidar Map (robot state) + Robot-Goal Relationship
     Output: Q-Values for all possible actions with Post-Processing to Angular Velocity
     Use Case: Autonomous Car Parking in outdoor parking lots
     Link to implementation: fetch from paper (Github not available)
 
-4. (Supervised NN-free ML) Decision tree (imitation learning) (2021)
+3. (Supervised NN-free ML) Decision tree (imitation learning) (2021)
     Input: Lidar Map + Goal Information + History
     Output: Concrete navigation command (action to take)
     Use Case: Robot Navigation in indoor environments with obstacles on the way
     Link to implementation: fetch from paper (Github is not available)
 
-Non-used models:
 
-1. (DNN-based) ConvNet + Skip Connections by Wang et al. (2017)
+
+4. (DNN-based) ConvNet + Skip Connections by Wang et al. (2017)
     Input: Lidar Scan + Goal information
     Output: Angular rate + Velocity of a robot
     Use Case: Simulated car navigation in open scenarios with obstacles 
-4. (Supervised NN-free) Fuzzy Logic and iterative decision trees by Hamzei et al. (1998)
+5. (Supervised NN-free) Fuzzy Logic and iterative decision trees by Hamzei et al. (1998)
     Input: Lidar Map + Goal Information
     Output: Angular Rate + Velocity
     Use Case: Simulated navigation in static spaces with local sensing only
-5. (Supervised NN-free) Support Vector Machines (2021)
+6. (Supervised NN-free) Support Vector Machines (2021)
     Input: 3D Lidar data
     Output: Object class identified
     Use Case: Autonomous Driving
-6. (Supervised NN-free) Particle Filter + Kalman Filter (2019)
+7. (Supervised NN-free) Particle Filter + Kalman Filter (2019)
     Input: 2D Lidar scan + orientation changes of robot + distance traveled + environment parameters
     Output: Lateral deviation + angular deviation
     Use Case: outdoor robot navigation on the wineyards within the rebstöcke
-7. (Unsupervised NN-free) PEARL (2018)
+8. (Unsupervised NN-free) PEARL (2018)
     Input: 2D lidar map
     Output: Direction command to move + angular velocity
     Use Case: agricultural robot

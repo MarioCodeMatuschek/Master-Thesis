@@ -21,8 +21,18 @@ def main():
     common.add_argument("--apt_cols", type=int, default=3)
     common.add_argument("--apt_door_prob", type=float, default=0.8)
     common.add_argument("--out", type=str, default="out_dataset")
-    common.add_argument("--width", type=float, default=30.0)
-    common.add_argument("--height", type=float, default=30.0)
+    common.add_argument(
+        "--width",
+        type=float,
+        default=15.0,
+        help="Scenario width (m) for manual/single generation; auto samples per scenario (see --scenario_dim_*). Default: 15.",
+    )
+    common.add_argument(
+        "--height",
+        type=float,
+        default=15.0,
+        help="Scenario height (m) for manual/single generation; auto samples per scenario. Default: 15.",
+    )
     common.add_argument("--n_rects", type=int, default=20)
     common.add_argument("--seed", type=int, default=0)
 
@@ -40,6 +50,18 @@ def main():
     auto.add_argument("--seq_per_scenario", type=int, default=50)
     auto.add_argument("--seq_steps", type=int, default=100)
     auto.add_argument("--grid_res", type=float, default=0.1)
+    auto.add_argument(
+        "--scenario_dim_min",
+        type=float,
+        default=7.0,
+        help="Automatic generation: minimum sampled extent per axis (m). Default: 7.",
+    )
+    auto.add_argument(
+        "--scenario_dim_max",
+        type=float,
+        default=15.0,
+        help="Automatic generation: maximum sampled extent per axis (m). Default: 15.",
+    )
 
     manual = sub.add_parser("manual", parents=[common, lid])
 
@@ -76,7 +98,9 @@ def main():
         seq_per_scenario=getattr(args, "seq_per_scenario", 1 if args.__dict__.get("scenario_id", None) is not None else 50),
         seq_steps=args.seq_steps,
         grid_res=args.grid_res,
-        seed=args.seed
+        seed=args.seed,
+        auto_scenario_dim_min=getattr(args, "scenario_dim_min", 7.0),
+        auto_scenario_dim_max=getattr(args, "scenario_dim_max", 15.0),
     )
     gen = DatasetGenerator(args.out, lidar, scen, cfg)
     if args.cmd == "auto":

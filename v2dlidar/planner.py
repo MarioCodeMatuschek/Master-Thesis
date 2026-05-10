@@ -10,7 +10,7 @@ def free_space_connected_components(
     height: float,
     res: float,
     interior: Optional[np.ndarray] = None,
-    thickness: float = 0.15,
+    thickness: float = 0.1,
 ) -> Tuple[int, int]:
     """
     Build occupancy from segments (and optional interior mask), then count
@@ -50,7 +50,7 @@ def free_space_connected_components(
     return n_components, n_free
 
 
-def occupancy_from_segments(segments: List[Segment], width: float, height: float, res: float, thickness: float=0.15):
+def occupancy_from_segments(segments: List[Segment], width: float, height: float, res: float, thickness: float=0.1):
     W = int(np.ceil(width/res)); H = int(np.ceil(height/res))
     occ = np.zeros((H, W), dtype=np.uint8)
     inflate = int(np.ceil(thickness / res))

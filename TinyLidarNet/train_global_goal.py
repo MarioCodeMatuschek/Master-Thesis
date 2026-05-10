@@ -1,4 +1,6 @@
-# Step 1: imports — rosbag and subprocess removed; csv/json/glob/math added
+# Variant: GLOBAL GOAL only.
+# Scalar input = [d_goal, a_goal] (shape 2) — distance and bearing to the
+# final destination only.  The local-waypoint scalars (d_next, a_next) are excluded.
 import os
 import csv
 import json
@@ -28,27 +30,23 @@ def huber_loss(y_true, y_pred, delta=1.0):
 
 #========================================================
 # Global Config
-# Step 1: dataset_path / down_sample_param / speed globals removed.
-# MAX_DIST is intentionally NOT a global constant — room dimensions vary across
-# scenarios (10×10, 20×20, 30×30 m in the current thesis_dataset, giving diagonals
-# of 14.14, 28.28, and 42.43 m respectively).  A single hardcoded value would
-# over-normalise smaller rooms by up to 3×.  Instead, max_dist is computed
-# per scenario inside the loader loop from scenario_meta.json:
+# MAX_DIST is NOT a global constant — room dimensions vary across scenarios.
+# It is computed per scenario from scenario_meta.json:
 #   spec.width / spec.height  →  max_dist = √(width² + height²)
 #========================================================
 
-DATASET_DIR  = '../new_testset'
+DATASET_DIR  = '../thesis_dataset'
 NUM_RAYS     = 720
 MAX_RANGE    = 12.0    # LiDAR maximum range in metres
 TRAIN_RATIO  = 0.85
 RANDOM_SEED  = 62
 
-model_name        = 'TLN'
+model_name        = 'TLN_global'
 model_files       = [
     './Models/' + model_name + '_noquantized.tflite',
     './Models/' + model_name + '_int8.tflite',
 ]
-loss_figure_path  = './Figures/loss_curve.png'
+loss_figure_path  = './Figures/loss_curve_global.png'
 lr                = 5e-5
 loss_function     = 'huber'
 batch_size        = 64
@@ -56,109 +54,93 @@ num_epochs        = 20
 hz                = 40
 
 #========================================================
-# Step 1 + 2: Load Dataset
-# Outer loop: one iteration per scenario directory.
-# Inner loop: one iteration per scan_id (3 scans per scenario).
-# Per sample we build:
-#   d_tilde  — masked, clipped, normalised LiDAR ranges  (720,)
-#   h_k      — binary hit mask                           (720,)
-#   scalars  — [d_next, a_next, d_goal, a_goal]          (4,)
-#   delta    — expert steering angle / π  ∈ [-1, 1]      scalar
+# Load Dataset
+# Scalar features: [d_goal, a_goal] — global goal only (shape 2 per sample).
+# d_next and a_next are computed (needed for the steering label) but NOT
+# included in all_scalars.
 #========================================================
 
 all_lidar_2ch = []   # will become (N, 720, 2)
-all_scalars   = []   # will become (N, 4)
+all_scalars   = []   # will become (N, 2)  ← global goal only
 all_steering  = []   # will become (N,)
 
 for scenario_dir in sorted(glob.glob(os.path.join(DATASET_DIR, 'scenario_*'))):
 
-    # Step 2: per-scenario normalisation distance from scenario_meta.json
     meta_path = os.path.join(scenario_dir, 'scenario_meta.json')
     with open(meta_path) as mf:
         meta = json.load(mf)
     w        = meta['spec']['width']
     h        = meta['spec']['height']
-    max_dist = math.sqrt(w ** 2 + h ** 2)   # e.g. 14.14 / 28.28 / 42.43
+    max_dist = math.sqrt(w ** 2 + h ** 2)
 
     csv_path = os.path.join(scenario_dir, 'scans_long.csv')
     with open(csv_path) as f:
         rows = list(csv.DictReader(f))
 
-    # Group the 720-row-per-scan CSV into scan_id buckets
     by_scan = {}
     for row in rows:
         by_scan.setdefault(row['scan_id'], []).append(row)
 
     for sid, group in sorted(by_scan.items()):
-        # Step 1: raw per-ray values
-        r_m   = np.array([float(r['r_m'])  for r in group], dtype=np.float32)   # (720,)
-        valid = np.array([float(r['valid']) for r in group], dtype=np.float32)   # (720,)
+        r_m   = np.array([float(r['r_m'])  for r in group], dtype=np.float32)
+        valid = np.array([float(r['valid']) for r in group], dtype=np.float32)
 
-        # Pose (identical for all 720 rows of this scan)
         pose_x   = float(group[0]['pose_x'])
         pose_y   = float(group[0]['pose_y'])
         pose_yaw = float(group[0]['pose_yaw'])
         fg_x     = float(group[0]['final_goal_x'])
         fg_y     = float(group[0]['final_goal_y'])
 
-        # Next waypoint from path JSON
         json_path = os.path.join(
             scenario_dir, 'scan_paths', f'scan_{int(sid):04d}.json')
         with open(json_path) as jf:
             path_data = json.load(jf)
         nxt = path_data['path'][1]
 
-        # Step 1: steering label — bearing to next waypoint relative to robot heading
+        # Steering label (derived from next waypoint — unchanged)
         dx, dy  = nxt['x'] - pose_x, nxt['y'] - pose_y
         bearing = math.atan2(dy, dx)
         delta   = (bearing - pose_yaw + math.pi) % (2 * math.pi) - math.pi
 
-        # Step 2: d_tilde — dropout rays → 0, out-of-range → MAX_RANGE, then normalise
-        d_tilde = np.where(valid == 1, np.clip(r_m, 0.0, MAX_RANGE), 0.0) / MAX_RANGE  # (720,)
-        h_k     = valid                                                                   # (720,)
+        # LiDAR channels
+        d_tilde = np.where(valid == 1, np.clip(r_m, 0.0, MAX_RANGE), 0.0) / MAX_RANGE
+        h_k     = valid
 
-        # Step 2: goal scalars — distances normalised by per-scenario room diagonal
-        dx_n, dy_n = nxt['x'] - pose_x,  nxt['y'] - pose_y
-        d_next     = math.sqrt(dx_n**2 + dy_n**2) / max_dist
-        a_next     = ((math.atan2(dy_n, dx_n) - pose_yaw + math.pi) % (2*math.pi) - math.pi) / math.pi
-
+        # Global goal scalars only
         dx_h, dy_h = fg_x - pose_x, fg_y - pose_y
         d_goal     = math.sqrt(dx_h**2 + dy_h**2) / max_dist
         a_goal     = ((math.atan2(dy_h, dx_h) - pose_yaw + math.pi) % (2*math.pi) - math.pi) / math.pi
 
-        all_lidar_2ch.append(np.stack([d_tilde, h_k], axis=-1))   # (720, 2)
-        all_scalars.append([d_next, a_next, d_goal, a_goal])        # (4,)
-        all_steering.append(delta / math.pi)                        # normalise to [-1, 1]
+        all_lidar_2ch.append(np.stack([d_tilde, h_k], axis=-1))  # (720, 2)
+        all_scalars.append([d_goal, a_goal])                       # (2,) — global only
+        all_steering.append(delta / math.pi)
 
-# Step 2: post-loop assembly
+# Post-loop assembly
 all_lidar_2ch = np.asarray(all_lidar_2ch, dtype=np.float32)  # (N, 720, 2)
-all_scalars   = np.asarray(all_scalars,   dtype=np.float32)  # (N, 4)
+all_scalars   = np.asarray(all_scalars,   dtype=np.float32)  # (N, 2)
 all_steering  = np.asarray(all_steering,  dtype=np.float32)  # (N,)
 
-# Shuffle all three arrays in lockstep
 all_lidar_2ch, all_scalars, all_steering = shuffle(
     all_lidar_2ch, all_scalars, all_steering, random_state=RANDOM_SEED)
 
 train_n        = int(TRAIN_RATIO * len(all_lidar_2ch))
-lidar_2ch      = all_lidar_2ch[:train_n]                       # (N_train, 720, 2)
-scalars        = all_scalars[:train_n]                         # (N_train, 4)
-steering       = all_steering[:train_n, np.newaxis]            # (N_train, 1)
-test_lidar_2ch = all_lidar_2ch[train_n:]                       # (N_test,  720, 2)
-test_scalars   = all_scalars[train_n:]                         # (N_test,  4)
-test_steering  = all_steering[train_n:, np.newaxis]            # (N_test,  1)
+lidar_2ch      = all_lidar_2ch[:train_n]
+scalars        = all_scalars[:train_n]
+steering       = all_steering[:train_n, np.newaxis]
+test_lidar_2ch = all_lidar_2ch[train_n:]
+test_scalars   = all_scalars[train_n:]
+test_steering  = all_steering[train_n:, np.newaxis]
 
 print(f'Train samples: {len(lidar_2ch)}, Test samples: {len(test_lidar_2ch)}')
 print(f'lidar_2ch: {lidar_2ch.shape}, scalars: {scalars.shape}, steering: {steering.shape}')
 
 #======================================================
-# Step 3: DNN Architecture — Functional API (two-input model)
-# Conv1D tower processes the (720, 2) LiDAR tensor.
-# After flattening, the 4 goal scalars are concatenated before the FC head.
-# Single Dense(1, tanh) output predicts δ ∈ [-1, 1]  (= steering_rad / π).
+# DNN Architecture — global goal variant
+# scalar_in shape is (2,): [d_goal, a_goal]
 #======================================================
 
 lidar_in  = tf.keras.Input(shape=(NUM_RAYS, 2), name='lidar')
-scalar_in = tf.keras.Input(shape=(4,),          name='scalars')
+scalar_in = tf.keras.Input(shape=(2,),          name='scalars_global')
 
 x = tf.keras.layers.Conv1D(24, 10, strides=4, activation='relu')(lidar_in)
 x = tf.keras.layers.Conv1D(36,  8, strides=4, activation='relu')(x)
@@ -183,7 +165,7 @@ model.compile(optimizer=optimizer, loss=loss_function)
 print(model.summary())
 
 #======================================================
-# Step 4: Model Fit — two-input call
+# Model Fit
 #======================================================
 
 start_time = time.time()
@@ -196,10 +178,9 @@ history = model.fit(
 )
 print(f'=============>{int(time.time() - start_time)} seconds<=============')
 
-# Plot training and validation losses
 plt.plot(history.history['loss'])
 plt.plot(history.history['val_loss'])
-plt.title('Model Loss')
+plt.title('Model Loss (global goal)')
 plt.ylabel('Loss')
 plt.xlabel('Epoch')
 plt.legend(['Train', 'Test'], loc='upper left')
@@ -207,8 +188,7 @@ plt.savefig(loss_figure_path)
 plt.close()
 
 #======================================================
-# Step 5: Model Evaluation — single steering output only
-# Speed output and servo/speed split evaluation removed.
+# Model Evaluation
 #======================================================
 
 print("==========================================")
@@ -218,7 +198,7 @@ print("==========================================")
 test_loss = model.evaluate([test_lidar_2ch, test_scalars], test_steering)
 print(f'Overall Test Loss = {test_loss}')
 
-y_pred = model.predict([test_lidar_2ch, test_scalars])   # (N_test, 1)
+y_pred = model.predict([test_lidar_2ch, test_scalars])
 hl = huber_loss(test_steering, y_pred)
 print(f'\nOverall Huber Loss: {hl:.3f}')
 
@@ -226,10 +206,9 @@ steering_test_loss = huber_loss(test_steering, y_pred)
 print(f'Steering Test Loss: {steering_test_loss:.4f}')
 
 #======================================================
-# Step 6: Save Model — TFLite export
+# Save Model — TFLite export
 #======================================================
 
-# Non-quantized — TFLiteConverter handles multi-input automatically
 converter = tf.lite.TFLiteConverter.from_keras_model(model)
 tflite_model = converter.convert()
 tflite_model_path = './Models/' + model_name + '_noquantized.tflite'
@@ -237,7 +216,6 @@ with open(tflite_model_path, 'wb') as f:
     f.write(tflite_model)
     print(f'{model_name}_noquantized.tflite is saved.')
 
-# Int8 quantized — representative_data_gen updated for two inputs
 def representative_data_gen():
     for i in range(len(lidar_2ch)):
         yield [
@@ -258,8 +236,7 @@ with open(tflite_model_path, 'wb') as f:
 print('TFLite models saved.')
 
 #======================================================
-# Step 7: Evaluate TFLite Models
-# evaluate_model updated: two input tensors, steering-only output.
+# Evaluate TFLite Models
 #======================================================
 
 def evaluate_model(model_path, test_lidar_2ch, test_scalars, test_steering):
@@ -267,7 +244,6 @@ def evaluate_model(model_path, test_lidar_2ch, test_scalars, test_steering):
     interpreter = tf.lite.Interpreter(model_path=model_path)
     interpreter.allocate_tensors()
 
-    # Retrieve both input tensor indices
     input_details    = interpreter.get_input_details()
     lidar_input_idx  = input_details[0]['index']
     scalar_input_idx = input_details[1]['index']
@@ -278,8 +254,8 @@ def evaluate_model(model_path, test_lidar_2ch, test_scalars, test_steering):
     output_steering = []
 
     for i, lidar_sample in enumerate(test_lidar_2ch):
-        l_in = lidar_sample[np.newaxis].astype(np.float32)    # (1, 720, 2)
-        s_in = test_scalars[i:i+1].astype(np.float32)          # (1, 4)
+        l_in = lidar_sample[np.newaxis].astype(np.float32)   # (1, 720, 2)
+        s_in = test_scalars[i:i+1].astype(np.float32)         # (1, 2)
 
         ts = time.time()
         interpreter.set_tensor(lidar_input_idx,  l_in)
@@ -293,11 +269,11 @@ def evaluate_model(model_path, test_lidar_2ch, test_scalars, test_steering):
             print('%.3f: took %.2f microseconds - deadline miss.' % (dur, int(dur * 1e6)))
         output_steering.append(output[0, 0])
 
-    y_pred = np.asarray(output_steering)[:, np.newaxis]   # (N_test, 1)
+    y_pred = np.asarray(output_steering)[:, np.newaxis]
 
-    arr     = np.array(inference_times_micros)
-    perc99  = np.percentile(arr, 99)
-    arr     = arr[arr < perc99]
+    arr    = np.array(inference_times_micros)
+    perc99 = np.percentile(arr, 99)
+    arr    = arr[arr < perc99]
     print('Model: ', model_path)
     print('Average Inference Time: %.2f microseconds' % np.mean(arr))
     print('Maximum Inference Time: %.2f microseconds' % np.max(arr))
@@ -312,7 +288,6 @@ for model_file in model_files:
     all_inference_times_micros.append(inference_times_micros)
     print(f'Huber Loss for {model_file}: {huber_loss(test_steering, y_pred):.4f}\n')
 
-# Plot inference times
 plt.figure()
 for inference_times_micros in all_inference_times_micros:
     arr    = np.array(inference_times_micros)
@@ -321,7 +296,7 @@ for inference_times_micros in all_inference_times_micros:
     plt.plot(arr)
 plt.xlabel('Inference Iteration')
 plt.ylabel('Inference Time (microseconds)')
-plt.title('Inference Time per Iteration')
+plt.title('Inference Time per Iteration (global goal)')
 plt.legend(model_files)
 
 print('End')

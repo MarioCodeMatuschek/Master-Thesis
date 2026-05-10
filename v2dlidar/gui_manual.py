@@ -40,8 +40,8 @@ class ManualGUI(tk.Tk):
             width=12,
         ).pack(anchor="w")
         ttk.Label(gen_frame, text="Width, Height").pack(anchor="w")
-        self.width_var = tk.DoubleVar(value=30.0)
-        self.height_var = tk.DoubleVar(value=30.0)
+        self.width_var = tk.DoubleVar(value=15.0)
+        self.height_var = tk.DoubleVar(value=15.0)
         row_wh = ttk.Frame(gen_frame)
         row_wh.pack(anchor="w")
         ttk.Entry(row_wh, textvariable=self.width_var, width=10).pack(side=tk.LEFT)

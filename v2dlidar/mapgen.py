@@ -7,8 +7,8 @@ from .geometry import Segment
 
 @dataclass
 class ScenarioSpec:
-    width: float = 30.0
-    height: float = 30.0
+    width: float = 15.0
+    height: float = 15.0
     n_rects: int = 20
     rect_min: Tuple[float, float] = (2.0, 2.0)
     rect_max: Tuple[float, float] = (8.0, 6.0)
@@ -19,7 +19,7 @@ class ScenarioSpec:
     apt_rows: int = 2   # room grid rows
     apt_cols: int = 3   # room grid cols
     apt_door_prob: float = 0.8  # chance of doorway between adjacent rooms
-    apt_min_door_width: float = 0.6  # min door gap (m); should exceed 2× occupancy wall thickness (~0.15 m) so doors stay traversable after inflation
+    apt_min_door_width: float = 0.5  # min door gap (m); should exceed 2× occupancy wall thickness (~0.1 m) so doors stay traversable after inflation
     apt_verify_connectivity: bool = True  # if True, ensure every room has >=2 connections and free space is one connected component
     apt_iterations: int = 2  # BSP split iterations for apartment layout (number of recursive splits)
 
@@ -263,8 +263,8 @@ def _merge_intervals(intervals: List[Tuple[float, float]]) -> List[Tuple[float, 
     return merged
 
 
-# Minimum door width for fallback doors; must exceed 2× occupancy thickness (0.15 m) so gaps stay open in grid.
-_APT_MIN_DOOR_FLOOR = 0.6
+# Minimum door width for fallback doors; must exceed 2× occupancy thickness (0.1 m) so gaps stay open in grid.
+_APT_MIN_DOOR_FLOOR = 0.5
 
 
 def _apt_door_position_clean(
@@ -359,7 +359,7 @@ def _apt_door_position_clean(
     return None
 
 
-def _apt_split_space(room: _AptRoom, rng: random.Random, min_size: float = 2.5) -> List[_AptRoom]:
+def _apt_split_space(room: _AptRoom, rng: random.Random, min_size: float = 1.0) -> List[_AptRoom]:
     """Split one room along the longer axis; returns [room] or [r1, r2]."""
     split_vertically = room.width > room.height
     if split_vertically and room.width > min_size * 2:
@@ -382,7 +382,7 @@ def _generate_apartment_bsp(
     height: float,
     iterations: int,
     rng: random.Random,
-    min_door_width: float = 0.6,
+    min_door_width: float = 0.5,
 ) -> Tuple[List[_AptRoom], List[Tuple[float, float, str, float]], List[Tuple[_AptRoom, _AptRoom]]]:
     """
     BSP apartment generator. Returns (rooms, doors, sibling_pairs). Doors are
@@ -819,7 +819,7 @@ def _resolve_apartment_rooms_and_doors(
     width = spec.width
     height = spec.height
     iterations = max(1, getattr(spec, "apt_iterations", 2))
-    effective_min_door_width = float(getattr(spec, "apt_min_door_width", 0.6))
+    effective_min_door_width = float(getattr(spec, "apt_min_door_width", 0.5))
     verify = getattr(spec, "apt_verify_connectivity", True)
     res = max(1e-3, float(spec.outline_res))
     W = int(math.ceil(width / res))

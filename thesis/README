@@ -12,14 +12,15 @@ DONE Define and implement navigation task formulation + Define ML Task (input an
 
 DONE Adjust the simulator to hold the final goal per scenario in addition to the intermediary goal (for every scan ray)
 
-Implement Models used for training and evaluation (Fetch Github or implement from paper)
-    a. Start with TinyLidar
+DONE Implement Models used for training and evaluation (Fetch Github or implement from paper)
+    a. Training and Evaluation for TinyLidarNet has been implemented and is working as expected.
 
-IN PROGRESS Generate a representative training set using the data simulator
-    DONE a. Initial samples have been manually created to see if the feature engineering pipeline works as intended
-    b. Full scale dataset creation
+DONE Generate a representative training set using the data simulator
+    DONE a. Initial samples have been manually created to see if the feature engineering pipeline / model training works as intended --> training of TinyLidarNet works (all pre-processing necessary before worked as well)
+    DONE b. Full scale dataset creation (a dataset of 10.000 scenarios has been created and is ready for training, validation and testing)
 
-Define dataset split strategy and split the dataset accordingly. 
+DONE Define dataset split strategy and split the dataset accordingly. 
+    a. For TinyLidarNet, one scenario has three connected samples and in general, the per scenario split (indirectly related to the sample split is 85/15 but can be changed and altered anytime)
 Work out Feature Engineering Pipeline (for classical machine learning models)
 Record data with Joey
 Compare simulated and real environments (using the defined metrics)

@@ -19,6 +19,9 @@ class AutoGenConfig:
     grid_res: float = 0.1
     clearance: float = 0.2
     seed: int = 0
+    # Automatic generation: sample width and height independently (meters), inclusive range.
+    auto_scenario_dim_min: float = 7.0
+    auto_scenario_dim_max: float = 15.0
 
 class DatasetGenerator:
     def __init__(self, out_dir: str, lidar: LidarSpec, scen: ScenarioSpec, cfg: AutoGenConfig):
@@ -43,14 +46,49 @@ class DatasetGenerator:
 
     def _sample_goal_far(self, occ, res, start_xy, rng):
         H, W = occ.shape
+        map_min_m = min(W, H) * res
+        min_sep = max(res * 0.5, map_min_m * 0.25)
+        min_sep_sq = min_sep * min_sep
+        sx = int(np.clip(start_xy[0] / res, 0, W - 1))
+        sy = int(np.clip(start_xy[1] / res, 0, H - 1))
+
+        def dist_sq(xy):
+            dx = xy[0] - start_xy[0]
+            dy = xy[1] - start_xy[1]
+            return dx * dx + dy * dy
+
         for _ in range(1000):
-            gx = rng.randrange(W); gy = rng.randrange(H)
-            if occ[gy,gx]: continue
-            x, y = gx*res, gy*res
-            dx, dy = x - start_xy[0], y - start_xy[1]
-            if dx*dx + dy*dy > (min(W,H)*res*0.25)**2:
-                return (x, y)
-        return (start_xy[0]+2.0, start_xy[1]+2.0)
+            gx = rng.randrange(W)
+            gy = rng.randrange(H)
+            if occ[gy, gx]:
+                continue
+            xy = (gx * res, gy * res)
+            if dist_sq(xy) > min_sep_sq:
+                return xy
+
+        # Tiny maps: relax separation (still prefer not exactly on start cell).
+        relaxed_sep_sq = max((res * 0.25) ** 2, (map_min_m * 0.05) ** 2)
+        for _ in range(2000):
+            gx = rng.randrange(W)
+            gy = rng.randrange(H)
+            if occ[gy, gx]:
+                continue
+            xy = (gx * res, gy * res)
+            if dist_sq(xy) > relaxed_sep_sq or gx != sx or gy != sy:
+                return xy
+
+        for _ in range(3000):
+            gx = rng.randrange(W)
+            gy = rng.randrange(H)
+            if occ[gy, gx]:
+                continue
+            return (gx * res, gy * res)
+
+        for gy in range(H):
+            for gx in range(W):
+                if occ[gy, gx] == 0:
+                    return (gx * res, gy * res)
+        return start_xy
 
     def _plan_multi_leg(
         self,
@@ -164,10 +202,22 @@ class DatasetGenerator:
 
         return None, None, None
 
-    def generate_scenario_data(self, scenario_id: int, manual_start: Optional[Tuple[float,float]]=None, manual_goal: Optional[Tuple[float,float]]=None, seed_offset:int=0):
+    def generate_scenario_data(
+        self,
+        scenario_id: int,
+        manual_start: Optional[Tuple[float, float]] = None,
+        manual_goal: Optional[Tuple[float, float]] = None,
+        seed_offset: int = 0,
+        scenario_width: Optional[float] = None,
+        scenario_height: Optional[float] = None,
+    ):
         rng = random.Random(self.cfg.seed + scenario_id + seed_offset)
         spec_kwargs = vars(self.scen_spec).copy()
         spec_kwargs["seed"] = self.scen_spec.seed + scenario_id
+        if scenario_width is not None:
+            spec_kwargs["width"] = scenario_width
+        if scenario_height is not None:
+            spec_kwargs["height"] = scenario_height
         # Generate geometry and interior mask (union of rectangles)
         segments, spec, interior, res, exterior_goal = generate_scenario(ScenarioSpec(**spec_kwargs))
         # Occupancy from walls only
@@ -342,8 +392,15 @@ class DatasetGenerator:
             })
 
     def generate_automated(self, start_scenario_id: int = 0, count: int = 10):
+        mn = float(self.cfg.auto_scenario_dim_min)
+        mx = float(self.cfg.auto_scenario_dim_max)
+        if mn > mx:
+            mn, mx = mx, mn
         for sid in range(start_scenario_id, start_scenario_id + count):
-            self.generate_scenario_data(sid)
+            rng_dim = random.Random(self.cfg.seed + sid)
+            w = rng_dim.uniform(mn, mx)
+            h = rng_dim.uniform(mn, mx)
+            self.generate_scenario_data(sid, scenario_width=w, scenario_height=h)
 
     def generate_manual(self, scenario_id: int, start: Tuple[float,float], goal: Tuple[float,float]):
         self.generate_scenario_data(scenario_id, manual_start=start, manual_goal=goal, seed_offset=999)

@@ -9,7 +9,7 @@ This module builds on `visualize_scenario`:
 - It reads one scan from `scans_long.csv` (all rays for a given scan_id).
 - It optionally overlays the ideal path from `scan_paths/scan_XXXX.json`.
 - It shows two linked views:
-  - World/layout view with walls, pose, path, and rays.
+  - World/layout view with walls, pose, path, and rays (valid; dropout as red lines to noise-free range; no wall as orange dashed to r_m).
   - Polar LiDAR view (angle vs. range) with noise-free baseline and dropout markers.
 """
 
@@ -22,6 +22,7 @@ from typing import Dict, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.collections import LineCollection
 
 from .mapgen import ScenarioSpec, generate_scenario
 from .lidar import LidarSpec
@@ -144,8 +145,17 @@ def draw_lidar_rays_on_ax(
     lidar_spec: LidarSpec,
     show_ideal_hits: bool = True,
 ) -> None:
-    """Overlay LiDAR rays for a single scan on the given Axes."""
-    x0, y0, yaw = pose
+    """Overlay LiDAR rays for a single scan on the given Axes.
+
+    Ray directions (valid, dropout, no-wall) and ideal hit dots are drawn flipped
+    180° for display on the layout axes only; stored angles and the polar subplot
+    are unchanged.
+
+    Invalid rays are split for the map view: dropout (measured r≈0) as solid red
+    lines to the noise-free range along each displayed beam, vs no wall hit as
+    orange dashed to r_m. The polar subplot is unchanged by this helper.
+    """
+    x0, y0, _yaw = pose
     theta_deg = scan_data["theta_deg"]
     r_m = scan_data["r_m"]
     noise_free_r_m = scan_data["noise_free_r_m"]
@@ -155,58 +165,85 @@ def draw_lidar_rays_on_ax(
 
     # Convert angles to radians in world coordinates: theta_deg is already absolute.
     theta_rad = np.radians(theta_deg)
+    # Visualization-only: flip drawn ray directions by 180° on the layout axes (polar unchanged).
+    cth = -np.cos(theta_rad)
+    sth = -np.sin(theta_rad)
 
-    # Draw valid rays to their hit points
-    vx = hit_x[valid]
-    vy = hit_y[valid]
-    for hx, hy in zip(vx, vy):
-        ax.plot(
-            [x0, hx],
-            [y0, hy],
-            color="#1f77b4",
-            linewidth=0.5,
+    dropout_eps = 1e-6
+    r_max = float(lidar_spec.max_range)
+
+    # Valid returns: line segments to hit points
+    if np.any(valid):
+        vx = hit_x[valid].astype(float)
+        vy = hit_y[valid].astype(float)
+        n = vx.size
+        segs_valid = np.empty((n, 2, 2), dtype=float)
+        segs_valid[:, 0, 0] = x0
+        segs_valid[:, 0, 1] = y0
+        segs_valid[:, 1, 0] = 2.0 * x0 - vx
+        segs_valid[:, 1, 1] = 2.0 * y0 - vy
+        lc_valid = LineCollection(
+            segs_valid,
+            colors="#1f77b4",
+            linewidths=0.5,
             alpha=0.5,
+            label="Valid return (noisy)",
         )
+        ax.add_collection(lc_valid)
 
-    # For invalid / dropout rays, draw according to the stored measured range `r_m`.
     invalid = ~valid
-    if np.any(invalid):
-        th_inv = theta_rad[invalid]
-        r_invalid = r_m[invalid]
+    dropout = invalid & (np.abs(r_m) < dropout_eps)
+    no_wall = invalid & (np.abs(r_m) >= dropout_eps)
 
-        # Avoid zero-length lines; instead show a small marker at the sensor origin.
-        zero_mask = np.abs(r_invalid) < 1e-6
-        if np.any(zero_mask):
-            ax.scatter(
-                np.full(np.count_nonzero(zero_mask), x0, dtype=float),
-                np.full(np.count_nonzero(zero_mask), y0, dtype=float),
-                c="red",
-                marker="x",
-                s=25,
-                alpha=0.8,
-                linewidths=1.0,
-            )
+    if np.any(dropout):
+        r_nf_d = np.clip(noise_free_r_m[dropout].astype(float), 0.0, r_max)
+        # Avoid degenerate segments if noise-free is exactly zero (rare).
+        r_nf_d = np.maximum(r_nf_d, 1e-9)
+        n_d = r_nf_d.size
+        x1 = x0 + r_nf_d * cth[dropout]
+        y1 = y0 + r_nf_d * sth[dropout]
+        segs_d = np.empty((n_d, 2, 2), dtype=float)
+        segs_d[:, 0, 0] = x0
+        segs_d[:, 0, 1] = y0
+        segs_d[:, 1, 0] = x1
+        segs_d[:, 1, 1] = y1
+        lc_drop = LineCollection(
+            segs_d,
+            colors="red",
+            linestyles="solid",
+            linewidths=0.7,
+            alpha=0.85,
+            label="Dropout / no return",
+            zorder=5,
+        )
+        ax.add_collection(lc_drop)
 
-        nonzero_mask = ~zero_mask
-        if np.any(nonzero_mask):
-            th_nz = th_inv[nonzero_mask]
-            r_nz = r_invalid[nonzero_mask]
-            x_end = x0 + r_nz * np.cos(th_nz)
-            y_end = y0 + r_nz * np.sin(th_nz)
-            for xe, ye in zip(x_end, y_end):
-                ax.plot(
-                    [x0, xe],
-                    [y0, ye],
-                    color="red",
-                    linewidth=0.4,
-                    alpha=0.3,
-                )
+    if np.any(no_wall):
+        r_nw = r_m[no_wall].astype(float)
+        x_end = x0 + r_nw * cth[no_wall]
+        y_end = y0 + r_nw * sth[no_wall]
+        n_nw = int(r_nw.size)
+        segs_nw = np.empty((n_nw, 2, 2), dtype=float)
+        segs_nw[:, 0, 0] = x0
+        segs_nw[:, 0, 1] = y0
+        segs_nw[:, 1, 0] = x_end
+        segs_nw[:, 1, 1] = y_end
+        lc_nw = LineCollection(
+            segs_nw,
+            colors="#ff7f0e",
+            linestyles="dashed",
+            linewidths=0.65,
+            alpha=0.55,
+            label="No wall hit within max range (r≈r_max)",
+            zorder=3,
+        )
+        ax.add_collection(lc_nw)
 
     # Optionally show ideal (noise-free) hit locations as small gray dots
     if show_ideal_hits:
         ideal_r = np.clip(noise_free_r_m, 0.0, lidar_spec.max_range)
-        ix = x0 + ideal_r * np.cos(theta_rad)
-        iy = y0 + ideal_r * np.sin(theta_rad)
+        ix = x0 + ideal_r * cth
+        iy = y0 + ideal_r * sth
         ax.scatter(
             ix,
             iy,
@@ -215,6 +252,10 @@ def draw_lidar_rays_on_ax(
             alpha=0.6,
             label="ideal (noise-free) hits",
         )
+
+    handles, _labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(loc="best", fontsize="small")
 
 
 def draw_polar_lidar(

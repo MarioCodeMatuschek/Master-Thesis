@@ -21,8 +21,9 @@ DONE Generate a representative training set using the data simulator
 
 DONE Define dataset split strategy and split the dataset accordingly. 
     a. For TinyLidarNet, one scenario has three connected samples and in general, the per scenario split (indirectly related to the sample split is 85/15 but can be changed and altered anytime)
-Work out Feature Engineering Pipeline (for classical machine learning models)
-Record data with Joey
+
+
+DONE Record data with Joey
 Compare simulated and real environments (using the defined metrics)
 Prepare Training Pipeline for ML Models
 Train first models 
